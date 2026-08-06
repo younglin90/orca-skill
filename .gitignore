@@ -1,0 +1,10 @@
+# Local run artifacts — never shared between machines
+*.log
+*.tmp
+.orca-cache/
+__pycache__/
+*.pyc
+
+# WSL / Windows debris
+*:Zone.Identifier
+.DS_Store

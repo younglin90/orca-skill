@@ -1,0 +1,201 @@
+---
+name: orca
+description: |
+  Token-minimizing Orca multi-agent pipeline: local OpenCode scouts, verifies and
+  does chores; Codex implements; Claude only approves plans and reviews high-risk
+  changes. Handoffs recorded in an Obsidian LLM Wiki. For features, bug fixes,
+  refactors, tests, build failures. Use for "orca", "다중 에이전트로 개발".
+argument-hint: 'goal="<objective>" [planner=|coder=|worker=|economy=|caveman=|codex_effort=|local_first=|wiki=]'
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+# Orca Wiki Pipeline
+
+Orca = 실행 권위, Obsidian LLM Wiki = 기록 권위, 로컬 모델 = 기본 실행자.
+현재 Claude 세션은 항상 Coordinator이자 최종 Reviewer다. 인수로 바꿀 수 없다.
+Orca CLI는 항상 `orca-ide`.
+
+## 0. 먼저: 신규인가 이어가기인가
+
+Wiki 경로를 정한 뒤 (§1) 가장 최근 Run 디렉터리의 `99-state.md`를 본다. Run
+디렉터리 위치는 `wiki-contract.md` §3.
+
+- `overall_status`가 `completed`/`failed`이거나 Run이 없으면 **신규 실행**.
+  §1부터 진행한다.
+- 그렇지 않고 사용자가 같은 목표를 이어가는 중이면 **이어가기**. 이때는
+  `99-state.md`와 `current_stage`에 해당하는 reference **하나만** 읽는다.
+  이미 읽은 문서를 다시 읽지 않고, 나머지 reference와 완료된 단계 문서는 건너뛴다.
+- 목표가 바뀌었으면 이어가기가 아니다. 새 Run을 만든다 (`token-policy.md` §5).
+
+## 1. 인수
+
+`key=value`, 순서 고정 없음. 값의 바깥 따옴표는 제거한다.
+
+| 의미 | 허용 키 | 값 | 기본값 |
+|---|---|---|---|
+| Planner | `planner`, `계획자` | claude\|codex\|opencode | claude |
+| Coder | `coder`, `코더` | claude\|codex\|opencode | codex |
+| Worker | `worker`, `janitor`, `잡일꾼` | claude\|codex\|opencode\|none | opencode |
+| Wiki | `wiki`, `vault`, `위키` | 절대경로 | `$REPO_ROOT/LLM-Wiki` |
+| Goal | `goal`, `objective`, `목적` | 문자열 (필수) | — |
+| Economy | `economy` | max\|balanced\|off | max |
+| Caveman | `caveman` | off\|lite\|full | lite |
+| Claude model | `claude_model` | opus\|sonnet\|fable\|`<full-id>`\|inherit | inherit |
+| Claude effort | `claude_effort` | low\|medium\|high\|xhigh\|max\|inherit | inherit |
+| Codex model | `codex_model` | `<model-id>`\|default | default |
+| Codex effort | `codex_effort` | low\|medium\|high\|xhigh\|auto | auto |
+| OpenCode model | `opencode_model` | `<provider>/<model>`\|default | default |
+| OpenCode variant | `opencode_variant` | provider별 effort 값\|default | default |
+| Local first | `local_first` | true\|false | true |
+
+- 허용 agent ID는 `claude`, `codex`, `opencode` 뿐이다. 알 수 없는 값은 임의로
+  대체하지 않는다. 허용 목록을 출력하고 중단한다.
+- `none`은 Worker 키에만 허용. `worker=none`이면 검증 단계를 Coordinator가
+  deterministic 도구로만 수행한다.
+- `goal` 없으면 목적을 묻고 중단한다.
+- 역할과 모델·effort에 조용한 기본값은 없다. 위 "기본값"은 첫 실행 질문의 권장
+  선택지다. 질문·기억 절차는 `references/wiki-contract.md` §1–2, 실제 적용 방법은
+  `references/orca-runtime.md` §3.
+- `inherit`/`default`는 해당 CLI의 기존 설정을 그대로 쓴다는 뜻이다. OpenCode의
+  provider와 로컬 모델은 이 Skill이 바꾸지 않는다.
+
+확정 후 실행 전에 한 줄 확인 출력:
+`planner=<a> coder=<a> worker=<a|none> economy=<m> claude=<model>/<effort>
+codex=<model>/<effort> wiki=<abs> goal=<text>`
+
+## 2. Reference 읽기 조건
+
+필요한 단계에서만 읽는다. 미리 전부 읽지 않는다.
+
+| 파일 | 읽는 시점 |
+|---|---|
+| `references/wiki-contract.md` | Wiki 경로·역할 결정, Run 디렉터리 생성, 문서 작성·갱신 |
+| `references/orca-runtime.md` | Orca 부트스트랩, Task 생성, worker 시작·대기·release |
+| `references/routing-policy.md` | 단계별 실행자 배정, local implementation gate, codex_effort |
+| `references/agent-contracts.md` | Task spec 작성, 산출물 형식 검사 |
+| `references/token-policy.md` | 파일 읽기 판단, brief 생성, 로그 전달, 압축 수준 |
+| `references/review-policy.md` | 최종 검토, correction 배정, 완료 판정 |
+
+## 3. 파이프라인
+
+```text
+S0 부트스트랩 → S1 deterministic context → S2 local scout → S3 plan
+→ S4 implement gate → S5 verify → S6 risk-based final review
+```
+
+**S0 부트스트랩** — `orca-runtime.md` §2로 runtime 상태 확인, live orchestration
+guide 로드, Run 생성. `wiki-contract.md` §1–3으로 Wiki 경로·역할
+확정, Run 디렉터리 생성, `00-run.md`와 `99-state.md` 작성.
+
+**S1 deterministic context** — LLM 없이 Coordinator가 직접:
+
+```bash
+scripts/collect-context.sh <run_dir>
+```
+
+`artifacts/`에 repo-tree, symbols, git-status, diff-stat 생성. 출력은 요약뿐이다.
+
+**S2 local scout** — `worker` agent (기본 opencode)에게 Task 배정.
+산출물 `10-context-pack.md` + `artifacts/context-manifest.json`.
+형식은 `agent-contracts.md` §1. Planner보다 **반드시 먼저** 실행한다.
+
+**S3 plan** — Planner는 `10-context-pack.md`와 `99-state.md`만 읽고
+`20-plan.md` 작성. 저장소 전체 재탐색 금지. `planner=claude`면 Coordinator가 직접
+수행하고 별도 worker를 만들지 않는다. 이어서 OpenCode가 `20-plan.brief.md` 생성.
+Coordinator가 계획을 승인한다.
+
+**S4 implement gate** — `routing-policy.md` §5–6.
+
+- `economy=max` + `local_first=true`: 저위험 작업이면 OpenCode가 먼저 구현.
+  gate 8개 조건을 모두 통과하면 Codex를 호출하지 않는다.
+- 그 외 또는 gate 실패: `30-coder-handoff.md` 작성 후 Coder(기본 codex) Task.
+  Codex에는 brief·handoff·대상 line range·acceptance·금지 범위·테스트 명령·보고서
+  경로만 전달한다 (`agent-contracts.md` §3).
+- 산출물 `40-coder-report.md`. Codex Task 종료 후 terminal release.
+
+**S5 verify** — `worker`가 `none`이 아니면 `50-worker-handoff.md` 작성 후 Worker
+Task. 빌드·테스트·lint는 `scripts/run-captured.sh`로 실행해 로그를 `artifacts/`에
+남긴다. 산출물 `60-worker-report.md`. `worker=none`이면 Coordinator가 같은 명령을
+직접 실행하고 결과만 `90-final-review.md`에 기록한다.
+
+**S6 final review** — `review-policy.md`. 고위험 변경만 정확한 diff 범위를 읽는다.
+`90-final-review.md` 작성, `99-state.md`를 completed/failed로 갱신.
+
+각 단계 종료 시 `99-state.md`와 `00-run.md` 진행표를 갱신한다.
+
+## 4. 명령 실행 규칙
+
+빌드·테스트·lint 등 로그가 나오는 명령은 전부:
+
+```bash
+scripts/run-captured.sh --log <run_dir>/artifacts/build.log --label build -- <argv>
+```
+
+- 원래 exit code가 그대로 보존된다. 성공 시 로그 본문을 출력하지 않는다.
+- 실패 시 `scripts/summarize-log.sh`가 결정적 실패 줄만 뽑는다.
+- deterministic 요약으로 부족할 때만 OpenCode가 raw log를 읽어 요약한다.
+- Claude와 Codex에 raw 로그 전체를 전달하지 않는다.
+
+파일을 읽기 전에는 `scripts/build-context-manifest.py <run_dir> check --path P`로
+중복 읽기를 확인한다 (`token-policy.md` §1).
+
+## 5. 실패 처리
+
+- worker `--outcome failed` 또는 `escalation`: correction budget 안에서 재배정.
+  Planner 1회, Codex 1회, OpenCode 1회 (`review-policy.md` §3).
+- 같은 실패 반복 시 추가 호출하지 않고 실패 정보를 기록하고 종료한다.
+- 한도 초과나 미충족 acceptance criteria는 성공으로 처리하지 않는다.
+- worker timeout은 실패가 아니다. rolling wait를 계속한다.
+- Orca runtime 상태 확인 실패는 즉시 중단 사유다 (`orca-runtime.md` §2).
+
+## 6. 최종 사용자 보고
+
+간결하게 다음만 출력한다.
+
+```text
+Goal / Planner / Coder / Worker / economy
+완료 여부
+주요 변경 (파일 단위)
+빌드·테스트 결과 (exit code + artifact 경로)
+Codex 호출 여부와 이유
+남은 위험
+Wiki Run 디렉터리 경로
+[[90-final-review]] 위치
+```
+
+문서 전문을 사용자 응답에 붙여넣지 않는다. 경로와 요약만 보고한다.
+
+## 7. 호출 예시
+
+```text
+/orca economy=max planner=claude coder=codex worker=opencode caveman=lite wiki="/home/user/Obsidian/LLM-Wiki" goal="경계 셀 gradient 정확도 문제를 수정하고 회귀 테스트를 추가한다"
+```
+
+```text
+/orca 계획자=claude 코더=opencode 잡일꾼=none 목적="C++ 솔버의 빌드 오류를 수정한다"
+```
+
+모델과 생각 깊이를 직접 지정. Claude worker에만 적용되며 Coordinator 세션은
+`/model`, `/effort`로 따로 정한다.
+
+```text
+/orca claude_model=opus claude_effort=xhigh codex_effort=high goal="수치 알고리즘의 경계조건 처리를 다시 구현한다"
+```
+
+역할·Wiki 생략 시 기억된 구성과 `$REPO_ROOT/LLM-Wiki`를 쓴다. 첫 실행이면 역할과
+모델·생각 깊이를 물어본다.
+
+```text
+/orca goal="사용자 인증 모듈의 세션 만료 처리를 구현하고 테스트를 추가한다"
+```
+
+## 8. 자체 검증
+
+Skill 자체를 수정한 뒤에는 `scripts/validate-skill.py`를 실행한다.
