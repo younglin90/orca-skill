@@ -82,8 +82,11 @@ risk — evidence — required owner
 ## 5. Session discipline
 
 - 무관한 작업을 같은 Run에 추가하지 않는다. 새 목표는 새 Run.
-- Codex worker는 Task 완료 후 release한다 (`orca-runtime.md` §3).
-- OpenCode terminal 재사용은 같은 역할의 즉시 후속 Task에만 허용한다.
+- 모든 worker는 stage settled 즉시 자동 release한다 (`orca-runtime.md` §3).
+  Coordinator 세션은 종료하지 않는다.
+- OpenCode terminal 재사용은 같은 역할의 즉시 후속 Task에만 허용한다. 그 후속
+  Task가 끝나면 release한다.
+- Run 종료 전 `worker-list --terminal-state reclaimable` sweep을 반드시 돈다.
 - 동일 문서를 반복해서 prompt에 붙이지 않는다. Wiki path로 참조한다.
 - 상태 보고만을 위한 agent 호출을 만들지 않는다. `99-state.md`로 대신한다.
 - worker timeout을 실패로 간주하지 않는다.

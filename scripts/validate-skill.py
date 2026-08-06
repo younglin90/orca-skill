@@ -30,6 +30,7 @@ SCRIPTS = [
     "run-captured.sh",
     "summarize-log.sh",
     "build-context-manifest.py",
+    "wait-for-report.sh",
     "validate-skill.py",
 ]
 
@@ -43,6 +44,8 @@ CANONICAL_OWNER = {
     "content_hash": "references/token-policy.md",
     "codex_effort=auto": "references/routing-policy.md",
     "Planner correction": "references/review-policy.md",
+    "report-file completion": "references/orca-runtime.md",
+    "artifacts/done/<stage>.done": "references/orca-runtime.md",
 }
 
 results: list[tuple[bool, str, str]] = []
@@ -230,6 +233,110 @@ def main() -> int:
     # 13. correction budget
     for marker in ("Planner correction", "Codex correction", "OpenCode mechanical correction"):
         check(marker in review, f"correction budget lists {marker}")
+
+    # 13.1 local worker completion contract
+    runtime = skill_files.get("references/orca-runtime.md", "")
+    check(
+        "report-file completion" in runtime,
+        "local worker completion contract documented",
+    )
+    check(
+        "sentinel만 보고 성공으로 처리하지 않는다" in runtime,
+        "sentinel alone never proves success",
+    )
+    check(
+        "/mnt/c/" in runtime and "CommandNotFoundException" in runtime,
+        "Windows-opencode/PowerShell precondition recorded",
+    )
+    check(
+        "tools.task=false" in runtime,
+        "subagent-tool precondition recorded",
+    )
+    check(
+        "worker-stop` 다음에 `task-update" in runtime,
+        "local completion states stop-then-close ordering",
+    )
+    check(
+        "spec 본문에는 큰따옴표를 쓰지 않는다" in runtime,
+        "spec quoting rule recorded",
+    )
+    check(
+        "영구적으로 `retained`로 남는다" in runtime,
+        "stopped dispatches stay retained (not a leak)",
+    )
+    check(
+        "preamble이 유실될 수 있다" in runtime,
+        "lost-preamble recovery recorded",
+    )
+    check(
+        "검증되지 않은 주장이다" in runtime,
+        "worker_done payload treated as unverified claim",
+    )
+    check(
+        "최대 3개" in contracts,
+        "local spec step ceiling recorded",
+    )
+    check(
+        "cd <절대경로> && <명령>" in contracts,
+        "spec must pin the working directory",
+    )
+    check(
+        "sentinel 직후에 바로 stop하지 않는다" in runtime,
+        "sentinel grace window before stopping the worker",
+    )
+    check(
+        "선택 추출을 시키지 않는다" in contracts,
+        "local workers are never asked to select-and-extract",
+    )
+    check(
+        "scripts/wait-for-report.sh" in text,
+        "SKILL.md points to scripts/wait-for-report.sh",
+    )
+    check(
+        "orca-runtime.md` §7" in contracts,
+        "agent-contracts routes local completion to the runtime contract",
+    )
+
+    # 13.2 wait-for-report.sh behavior: run it, do not grep it
+    waiter = os.path.join(skill_dir, "scripts", "wait-for-report.sh")
+    if os.path.isfile(waiter):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "nope.done")
+            proc = subprocess.run(
+                [waiter, "--done", missing, "--timeout-sec", "1", "--interval-sec", "1"],
+                capture_output=True, text=True,
+            )
+            check(proc.returncode == 1, "wait-for-report.sh exits 1 on timeout",
+                  f"got {proc.returncode}")
+            check("state: timeout" in proc.stdout, "wait-for-report.sh reports timeout state")
+
+            done = os.path.join(tmp, "ok.done")
+            report = os.path.join(tmp, "ok.md")
+            with open(done, "w", encoding="utf-8") as fh:
+                fh.write("ok\n")
+            with open(report, "w", encoding="utf-8") as fh:
+                fh.write("build: pass\n")
+            proc_ok = subprocess.run(
+                [waiter, "--done", done, "--report", report,
+                 "--timeout-sec", "5", "--interval-sec", "1"],
+                capture_output=True, text=True,
+            )
+            check(proc_ok.returncode == 0, "wait-for-report.sh exits 0 when ready",
+                  f"got {proc_ok.returncode}")
+            check("state: ready" in proc_ok.stdout, "wait-for-report.sh reports ready state")
+
+            empty = os.path.join(tmp, "empty.md")
+            open(empty, "w", encoding="utf-8").close()
+            proc_bad = subprocess.run(
+                [waiter, "--done", done, "--report", empty,
+                 "--timeout-sec", "5", "--interval-sec", "1"],
+                capture_output=True, text=True,
+            )
+            check(proc_bad.returncode == 1,
+                  "wait-for-report.sh fails on sentinel without report",
+                  f"got {proc_bad.returncode}")
 
     # 14. invocation examples
     check(text.count("/orca") >= 3, "SKILL.md shows >= 3 invocation examples")

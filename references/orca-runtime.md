@@ -64,6 +64,22 @@ orca-ide orchestration worker-release --dispatch <dispatch_id> --json
   `worker-retain --dispatch <id>`로 예외 기록한다. 나중의 명시적 `worker-release`가
   이 예외를 해제하고 종료시킨다.
 
+### spec 인용 규칙
+
+`--spec` 값은 CLI 인수 파서를 통과한다. 실측에서 다음이 깨졌다.
+
+- spec 안의 큰따옴표 `"`: 파서가 그 지점에서 인수를 다시 쪼개
+  `Unknown command: orchestration task-create <spec 뒷부분>`으로 실패한다.
+- spec 안의 heredoc(`<<EOF`)과 `$(...)`: 셸이 먼저 먹거나 파서가 깨진다.
+
+따라서 spec 본문에는 큰따옴표를 쓰지 않는다. 문자열 리터럴이 필요하면 홑따옴표를
+쓰고, 실행할 코드가 복잡하면 **Run 디렉터리 `artifacts/`에 스크립트 파일로 저장한
+뒤 spec에는 그 절대경로 한 줄만** 넣는다. 스크립트는 실패 시 nonzero로 끝나게
+작성해 no-op을 성공으로 보고할 수 없게 한다.
+
+`task-create` 응답에 `result`가 없으면 파싱 실패다. Task ID를 만들어 내지 말고
+spec을 고쳐 다시 만든다.
+
 ### 모델과 생각 깊이 적용
 
 `worker-start --agent <agent>`는 agent CLI를 기본 설정으로 띄운다. 모델이나
@@ -146,6 +162,13 @@ orca-ide orchestration worker-list --run <run_id> --terminal-state reclaimable -
 `99-state.md`의 `overall_status`를 terminal 종료보다 먼저 쓰지 않는다. sweep 결과를
 확인한 뒤 최종 상태를 기록한다.
 
+**`worker-stop`으로 끝낸 dispatch는 영구적으로 `retained`로 남는다.** 실측: stop된
+dispatch에 `worker-release`를 걸면 `dispatch_inactive`로 거부되고 상태가 바뀌지
+않는다. 이건 누수가 아니라 Orca의 기록 방식이다. sweep은 `reclaimable`이 비었는지만
+확인하고, 남은 `retained` 개수와 그 원인(재시도·실패로 stop한 dispatch)을
+`90-final-review.md`에 한 줄로 적는다. `retained`를 0으로 만들려고 파괴적 명령을
+찾지 않는다.
+
 ## 6. 실패 처리
 
 - `worker_done --outcome failed`: 보고서와 artifact를 읽고 correction budget
@@ -161,17 +184,124 @@ orca-ide orchestration worker-list --run <run_id> --terminal-state reclaimable -
 - 이 호스트(WSL)에서 `terminal wait --for tui-idle`이 bridge 인자 오류로 실패할 수
   있다. 그때는 `terminal read`로 TUI 준비 상태를 확인하고 진행한다. 실패를 무시하고
   바로 dispatch하지 않는다.
+- **`worker-start`가 `input_accepted`를 반환해도 preamble이 유실될 수 있다.** 실측:
+  agent CLI가 아직 뜨는 중이면 주입 텍스트가 TUI 명령 팔레트로 흘러들어가고 worker는
+  TASK를 받지 못한 채 idle로 남는다. 증상은 timeout인데 산출물 파일이 하나도 없고
+  `worker-read`에 TASK 블록이 보이지 않는 것이다. 이때는 `worker-stop` →
+  `task-update --status ready` → `worker-start`로 재시작한다. spec을 고치거나 모델을
+  탓하기 전에 **TASK 블록이 실제로 주입됐는지부터 확인한다.**
 - **custom argv 경로에서는 `worker_done`이 거부될 수 있다.** 실측: `terminal
   create` + `dispatch --inject`로 띄운 OpenCode worker가 보낸 `worker_done`이
   `The Dispatch capability is missing for the given dispatch ID`로 거부됐다.
   `worker-start`로 띄운 Codex worker는 정상 처리됐다. 그러므로 모델 override가
   필요 없으면 항상 `worker-start`를 쓴다. custom argv가 필요해서 거부가 발생하면,
-  Coordinator가 산출물 파일을 직접 확인한 뒤
-  `task-update --id <task_id> --status completed --result '<json>'`로 닫는다.
-  worker의 보고 없이 성공으로 간주하지 않는다. 확인한 산출물 경로를 result에 남긴다.
+  §7의 report-file completion으로 닫는다. worker의 보고 없이 성공으로 간주하지
+  않는다. 확인한 산출물 경로를 result에 남긴다.
 - 같은 이유로 **custom argv worker는 `worker-release`로 종료되지 않을 수 있다.**
   `worker-release`는 proven identity의 coordinator-owned terminal만 닫고, 그 외에는
   `release_unknown`을 반환한다. 이때는 `terminal create`가 반환한 handle을 그대로
   써서 `terminal close --terminal <handle> --json`으로 닫는다. handle을 잃어버렸으면
   `terminal list`로 title(생성 시 지정한 stage 이름)을 맞춰 찾는다. 그래서 custom
   argv 경로에서는 `terminal create`의 handle을 반드시 `00-run.md`에 기록한다.
+
+## 7. 로컬 worker 완료 규약 (report-file completion)
+
+적용 조건: worker가 OpenCode이고 그 뒤의 모델이 **로컬 모델**(Ollama 등)일 때.
+Codex·Claude worker는 §3의 `worker_done` 경로를 그대로 쓴다. 두 경로를 섞지 않는다.
+
+근거 (실측, 2026-08-06):
+
+- `qwen3:8b`(num_ctx 32768)는 `bash` 툴 호출과 파일 작성을 정상 수행했다. 그러나
+  preamble의 완료 명령(`orchestration send --from … --dispatch-capability <64자>
+  --type worker_done …`)은 완성된 리터럴 한 줄로 재주입해도 실행하지 못하고 턴을
+  끝냈다. `gemma4:12b`도 동일하게 실패했다.
+- `qwen2.5-coder:7b`는 더 나빴다. 툴 호출을 실제 tool_call이 아니라 평문
+  `{"name": "bash", "arguments": …}`로 출력했다.
+
+결론: 로컬 8B급 모델에 lifecycle 메시지 전송을 요구하지 않는다. 작업 수행 능력과
+프로토콜 준수 능력은 별개다.
+
+### 규약
+
+1. Task spec의 마지막 단계는 **보고서 파일 작성 + sentinel 파일 생성**이다.
+   sentinel 경로는 `<run_dir>/artifacts/done/<stage>.done`, 내용은 한 줄로
+   `ok` 또는 `fail: <이유>`. 전송할 명령이 아니라 쓸 파일을 지시한다.
+2. Coordinator는 로컬 stage 완료를 `check --wait`로 기다리지 않는다. 대신:
+
+   ```bash
+   scripts/wait-for-report.sh --done <run_dir>/artifacts/done/<stage>.done \
+       --report <run_dir>/<stage-report>.md --timeout-sec 1800 --interval-sec 10
+   ```
+
+   exit 0이면 sentinel과 보고서가 모두 존재한다. exit 1은 timeout 또는
+   sentinel만 있고 보고서가 빈 경우다.
+3. **sentinel만 보고 성공으로 처리하지 않는다.** 보고서를 읽고
+   `agent-contracts.md`의 해당 역할 출력 형식과 대조한다. 형식 불일치·필수 필드
+   누락은 실패다.
+4. **sentinel 직후에 바로 stop하지 않는다. 짧은 유예를 준다.** 실측: 로컬 worker가
+   sentinel을 쓴 **뒤에** `worker_done`을 보내는 경우가 있다. sentinel만 보고 즉시
+   `worker-stop`하면 그 `worker_done`이
+   `The Dispatch capability is invalid`로 거부되고 Run 메일함에 rejected 메시지가
+   남는다. sentinel이 확인되면 먼저 한 번만 짧게 기다린다.
+
+   ```bash
+   orca-ide orchestration check --wait --types worker_done,escalation \
+       --timeout-ms 30000 --json
+   ```
+
+   - `worker_done`이 오면 §3 경로로 처리한다. Task는 자동 completed가 되므로
+     `task-update`를 덧붙이지 않고, `worker-stop` 대신 `worker-release`를 쓴다.
+     이렇게 하면 dispatch가 `retained`가 아니라 `released`로 정리된다.
+   - 30초 안에 오지 않으면 5번의 stop-then-close 경로로 간다. 이 유예를 늘리지
+     않는다. 로컬 worker의 `worker_done`은 보장되지 않는다.
+5. **`worker_done`이 오지 않았을 때만 Coordinator가 Task를 닫는다. 순서는
+   worker 종료 → Task 닫기.** `worker_done` 없이 끝난 Dispatch는 `ready` 상태로
+   남는다. 이때:
+   - `worker-release`는 거부된다 (`Dispatch ... is ready; only a succeeded or
+     failed worker can release`). 대신 `worker-stop`을 쓴다.
+   - Task를 먼저 completed로 바꾸고 나중에 `worker-stop`을 하면 **그 Task가 다시
+     `blocked`로 되돌아간다** (실측). 반드시 `worker-stop` 다음에 `task-update`.
+
+   ```bash
+   orca-ide orchestration worker-stop --dispatch <dispatch_id> --json
+   orca-ide orchestration task-update --id <task_id> --status completed \
+       --result '{"report":"<abs report path>","closed_by":"coordinator"}' --json
+   orca-ide orchestration task-list --run <run_id> --brief --json   # 상태 확인
+   ```
+
+   닫은 뒤 `task-list`로 status가 유지되는지 확인한다. Task status와 terminal
+   상태는 별개다. sentinel이 `fail:`이거나 3번의 형식 검사에 실패하면
+   `--status failed`로 닫고 §6의 correction 절차로 넘어간다.
+6. timeout이면 실패로 단정하지 않는다. `worker-read`로 진행 상태를 먼저 확인하고,
+   진전이 없을 때만 실패 처리한다.
+7. 로컬 worker가 `worker_done`을 실제로 보냈다면 그것을 우선 수락하고 §3대로
+   처리한다. 이 규약은 폴백이지 금지가 아니다. 실측: `gemma4-32k:12b`는 3단계
+   spec에서는 보내지 못했지만, `terminal send`로 한 단계씩 밀어 준 뒤에는 정상
+   `worker_done`을 보냈다.
+8. **`worker_done` payload의 필드는 검증되지 않은 주장이다.** 실측:
+   `filesModified`에 실제로는 수정되지 않은 파일이 들어 있었다. `outcome`,
+   `filesModified`, `reportPath`를 근거로 쓰지 않는다. 파일 변경 여부는
+   `build-context-manifest.py check`나 `git status`로, 테스트 결과는
+   `run-captured.sh` 로그의 exit code로 Coordinator가 직접 확인한다.
+9. **로컬 worker 보고서의 수치를 그대로 인용하지 않는다.** 실측: worker가
+   `grep -c test`(괄호 유실)로 센 값을 `13 test cases`로 보고했으나 실제는 12였다.
+   개수·크기·exit code는 Coordinator가 다시 센다.
+
+### 환경 전제
+
+아래를 만족하지 못하면 그 단계를 로컬에 배정하지 않고 사유를 `00-run.md`에 적는다.
+
+1. `command -v opencode` 결과가 `/mnt/c/`로 시작하면 **안 된다**. 실측: Windows npm
+   설치본은 cwd가 WSL 경로여도 bash 툴을 PowerShell에서 실행해 모든 Unix 명령이
+   `CommandNotFoundException`으로 실패한다. WSL 네이티브 설치본이 PATH 앞에 있어야
+   한다.
+2. 로컬 모델의 실효 context가 32768 이상이어야 한다. 확인:
+
+   ```bash
+   curl -s http://127.0.0.1:11434/api/ps | python3 -m json.tool | grep -i context
+   ```
+
+   서버 기본값이 낮아도 Modelfile의 `PARAMETER num_ctx`가 우선하므로, 사용자에게
+   그 방법을 제안할 수 있다. Skill이 Ollama나 OpenCode 설정을 임의로 바꾸지 않는다.
+3. OpenCode의 subagent 툴이 꺼져 있어야 한다 (`tools.task=false`). 실측:
+   `qwen3:8b`가 subagent를 무한 스폰하며 같은 작업을 반복했다.

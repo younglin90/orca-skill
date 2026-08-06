@@ -54,12 +54,16 @@ Wiki 경로를 정한 뒤 (§1) 가장 최근 Run 디렉터리의 `99-state.md`�
 | OpenCode model | `opencode_model` | `<provider>/<model>`\|default | default |
 | OpenCode variant | `opencode_variant` | provider별 effort 값\|default | default |
 | Local first | `local_first` | true\|false | true |
+| Worker 보존 | `keep_workers` | true\|false | false |
 
 - 허용 agent ID는 `claude`, `codex`, `opencode` 뿐이다. 알 수 없는 값은 임의로
   대체하지 않는다. 허용 목록을 출력하고 중단한다.
 - `none`은 Worker 키에만 허용. `worker=none`이면 검증 단계를 Coordinator가
   deterministic 도구로만 수행한다.
 - `goal` 없으면 목적을 묻고 중단한다.
+- `keep_workers=false`(기본)이면 worker terminal은 단계 종료 즉시 자동 종료된다
+  (`orca-runtime.md` §3). Coordinator 세션은 어떤 값에서도 종료하지 않는다.
+  `true`는 디버깅용으로 모든 worker terminal을 살려 둔다.
 - 역할과 모델·effort에 조용한 기본값은 없다. 위 "기본값"은 첫 실행 질문의 권장
   선택지다. 질문·기억 절차는 `references/wiki-contract.md` §1–2, 실제 적용 방법은
   `references/orca-runtime.md` §3.
@@ -77,7 +81,7 @@ codex=<model>/<effort> wiki=<abs> goal=<text>`
 | 파일 | 읽는 시점 |
 |---|---|
 | `references/wiki-contract.md` | Wiki 경로·역할 결정, Run 디렉터리 생성, 문서 작성·갱신 |
-| `references/orca-runtime.md` | Orca 부트스트랩, Task 생성, worker 시작·대기·release |
+| `references/orca-runtime.md` | Orca 부트스트랩, Task 생성, worker 시작·대기·release, 로컬 worker 완료 판정 |
 | `references/routing-policy.md` | 단계별 실행자 배정, local implementation gate, codex_effort |
 | `references/agent-contracts.md` | Task spec 작성, 산출물 형식 검사 |
 | `references/token-policy.md` | 파일 읽기 판단, brief 생성, 로그 전달, 압축 수준 |
@@ -105,6 +109,8 @@ scripts/collect-context.sh <run_dir>
 **S2 local scout** — `worker` agent (기본 opencode)에게 Task 배정.
 산출물 `10-context-pack.md` + `artifacts/context-manifest.json`.
 형식은 `agent-contracts.md` §1. Planner보다 **반드시 먼저** 실행한다.
+로컬 모델 worker는 lifecycle 메시지를 보내지 못한다. 완료 판정은
+`orca-runtime.md` §7 (보고서 파일 + sentinel + Coordinator가 Task를 닫음).
 
 **S3 plan** — Planner는 `10-context-pack.md`와 `99-state.md`만 읽고
 `20-plan.md` 작성. 저장소 전체 재탐색 금지. `planner=claude`면 Coordinator가 직접
@@ -118,12 +124,14 @@ Coordinator가 계획을 승인한다.
 - 그 외 또는 gate 실패: `30-coder-handoff.md` 작성 후 Coder(기본 codex) Task.
   Codex에는 brief·handoff·대상 line range·acceptance·금지 범위·테스트 명령·보고서
   경로만 전달한다 (`agent-contracts.md` §3).
-- 산출물 `40-coder-report.md`. Codex Task 종료 후 terminal release.
+- 산출물 `40-coder-report.md`. Codex Task 종료 후 terminal release
+  (`orca-runtime.md` §3).
 
 **S5 verify** — `worker`가 `none`이 아니면 `50-worker-handoff.md` 작성 후 Worker
 Task. 빌드·테스트·lint는 `scripts/run-captured.sh`로 실행해 로그를 `artifacts/`에
-남긴다. 산출물 `60-worker-report.md`. `worker=none`이면 Coordinator가 같은 명령을
-직접 실행하고 결과만 `90-final-review.md`에 기록한다.
+남긴다. 산출물 `60-worker-report.md`. 로컬 모델 worker면 S2와 같은 §7 완료 판정을
+쓴다. `worker=none`이면 Coordinator가 같은 명령을 직접 실행하고 결과만
+`90-final-review.md`에 기록한다.
 
 **S6 final review** — `review-policy.md`. 고위험 변경만 정확한 diff 범위를 읽는다.
 `90-final-review.md` 작성.
@@ -151,6 +159,9 @@ scripts/run-captured.sh --log <run_dir>/artifacts/build.log --label build -- <ar
 
 파일을 읽기 전에는 `scripts/build-context-manifest.py <run_dir> check --path P`로
 중복 읽기를 확인한다 (`token-policy.md` §1).
+
+로컬 worker 완료를 기다릴 때는 `scripts/wait-for-report.sh`로 sentinel을 폴링한다.
+sleep/poll 루프를 직접 짜지 않는다.
 
 ## 5. 실패 처리
 

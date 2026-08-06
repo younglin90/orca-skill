@@ -11,7 +11,11 @@
 2. 금지 사항
 3. 산출물 파일의 절대경로
 4. 출력 형식 (아래 블록)
-5. 완료 시 `worker_done` 전송, 본문에 산출물 절대경로 포함
+5. 완료 방식. agent에 따라 갈린다.
+   - Codex·Claude worker: 완료 시 `worker_done` 전송, 본문에 산출물 절대경로 포함.
+   - 로컬 모델 OpenCode worker: lifecycle 메시지를 요구하지 않는다. 보고서 파일과
+     sentinel 파일을 쓰게 하고 Coordinator가 Task를 닫는다
+     (`orca-runtime.md` §7).
 
 모든 worker 공통 금지:
 
@@ -24,6 +28,9 @@
 
 ### 로컬 모델(OpenCode) Task spec 강화
 
+배정 전에 `orca-runtime.md` §7 "환경 전제"를 먼저 확인한다. 전제가 깨져 있으면
+spec을 아무리 다듬어도 실패한다.
+
 작은 로컬 모델은 존재하지 않는 툴을 호출하다 정지하는 경우가 있다 (실측: `explore`
 툴 반복 호출 후 stall). OpenCode에 보내는 spec에는 반드시 다음을 넣는다.
 
@@ -32,34 +39,53 @@
 2. 첫 동작을 지시한다: 먼저 산출물 파일을 만들고, 채워 넣은 뒤 완료한다.
 3. 자유 탐색 대신 **실행할 명령을 그대로 적어 준다**. 예:
    `grep -n "add_test" CMakeLists.txt`, `head -100 <artifact>`.
-4. 완료 명령에 placeholder를 남기지 않는다. Dispatch ID는 Task 생성 시점에 아직
-   없으므로, worker 시작 직후 실제 ID가 들어간 **완성된 한 줄**을 follow-up 메시지로
-   보낸다 (`orca-ide orchestration send --to dispatch:<id> --subject "completion
-   command" --body "<literal command>"`). 작은 모델이 preamble에서 ID를 찾아
-   조립하도록 기대하지 않는다.
+   같은 이유로 **선택 추출을 시키지 않는다.** 실측: 120줄 문서를 보여 주고
+   "이 7개 섹션만 골라 그대로 옮겨라"라고 한 로컬 worker는 파일을 읽은 뒤 정지했다.
+   어느 줄이 어느 섹션인지 판단하는 것 자체가 부담이다. Coordinator가 먼저
+   `grep -n '^## '`로 섹션 line number를 확인하고, spec에는 **정확한 range 한 줄**을
+   준다.
+
+   ```bash
+   # 나쁨: Copy the Objective, Files and symbols, Acceptance criteria sections
+   # 좋음:
+   sed -n '17,21p;38,77p;96,119p' <plan> > <brief>
+   ```
+
+   같은 worker가 선택 추출에서 멈춘 직후 이 range 명령을 받고는 즉시 성공했다.
+   요약·재작성이 정말 필요하면 그 단계는 로컬에 배정하지 않는다.
+4. **완료를 명령 전송으로 요구하지 않는다.** 실측에서 완성된 리터럴 한 줄을
+   주입해도 로컬 모델이 실행하지 못했다. 대신 spec의 마지막 단계를 파일 작성으로
+   고정한다: 보고서 파일을 쓴 뒤 sentinel 파일에 `ok` 한 줄을 쓴다. 경로와 판정
+   절차는 `orca-runtime.md` §7. spec 문구 예:
+
+   ```text
+   LAST STEP: use the write tool to create
+   /abs/run_dir/artifacts/done/scout.done containing exactly one line: ok
+   ```
 5. 단계 수를 제한한다: "탐색은 5개 명령 이내, 그 다음 바로 파일 작성."
 6. 로컬 모델의 context window는 작을 수 있다. artifact 전체를 읽으라고 하지 말고
    `head`/`grep`로 필요한 부분만 보게 한다.
-7. **한 메시지에 한 동작.** 실측에서 다단계 spec을 한 번에 준 로컬 worker는
-   생각만 하고 툴을 호출하지 않았다. 같은 모델에 `"Use the write tool now to
-   create <path> containing ..."`처럼 단일 명령형으로 주면 즉시 수행했다.
-   따라서 로컬 단계는 Coordinator가 `terminal send`로 한 단계씩 밀어 준다:
+7. **한 메시지에 한 동작. 초기 spec의 툴 호출 단계는 최대 3개.** 실측에서
+   4~5단계 spec을 받은 로컬 worker는 예외 없이 3번째 툴 호출 뒤에 멈췄다
+   (`gemma4-32k:12b`, S4·S5 모두). 툴을 호출하지 않고 생각만 하다 턴을 끝내거나,
+   `edit` 툴의 `oldString not found` 재시도 루프에 빠진다. 단계가 더 필요하면
+   Coordinator가 `terminal send`로 한 단계씩 밀어 준다:
    ① 파일 생성 → ② 조사 명령 1개 → ③ 결과 반영 → ④ 완료 보고.
    각 메시지는 `Run this exact command now:` / `Use the write tool now to ...`로
    시작하고 대안이나 배경 설명을 붙이지 않는다.
-8. **spec 자체를 짧게 유지한다: 25줄 이내.** 실측에서 ollama `gemma4:26b`의
-   `num_ctx`가 4096이었고, 40줄짜리 spec을 준 worker는 툴 호출 없이 생성만 하다
-   멈췄다. 단계 배정 전에 로컬 모델의 실제 context 크기를 확인한다:
-
-   ```bash
-   curl -s http://localhost:11434/api/ps | python3 -m json.tool | grep context_length
-   ```
-
-   `context_length`가 8192 미만이면 그 단계를 로컬에 배정하지 않거나, spec을
-   10줄 이하 + 명령 2개로 더 줄인다. 사용자에게 `num_ctx` 상향을 제안할 수는
-   있으나 Skill이 Ollama 설정을 임의로 바꾸지 않는다. 실측 기준: 4096은 실패,
-   16384는 정상 동작.
-9. **Wiki는 반드시 worktree 안에 둔다.** OpenCode는 worktree 밖 경로에 쓰려 할 때
+   spec에 `edit` 툴 사용을 지시하지 않는다. 기존 파일 수정은 `write`로 전체를 다시
+   쓰게 하거나, `artifacts/`의 패치 스크립트를 실행시킨다
+   (`orca-runtime.md` §3 spec 인용 규칙).
+8. **spec 자체를 짧게 유지한다: 25줄 이내.** 실측에서 40줄짜리 spec을 준 로컬
+   worker는 툴 호출 없이 생성만 하다 멈췄다. 실효 context 확인과 하한은
+   `orca-runtime.md` §7 "환경 전제"에서 다룬다. 하한을 만족해도 spec 길이 규칙은
+   유지한다. 짧은 spec은 compaction뿐 아니라 주의 분산도 줄인다.
+9. **모든 명령에 작업 디렉터리를 명시한다.** worker의 cwd는 worktree 루트다.
+   하위 패키지의 명령을 그냥 적으면 엉뚱한 곳에서 돌아 실패한다. 실측: `npm test`만
+   적은 spec이 저장소 루트에서 실행돼
+   `Could not read package.json: ENOENT ... /ProjectRoot/package.json`으로 죽었다.
+   `cd <절대경로> && <명령>` 형태로 쓴다. 이건 모델의 실패가 아니라 spec의 결함이다.
+10. **Wiki는 반드시 worktree 안에 둔다.** OpenCode는 worktree 밖 경로에 쓰려 할 때
    `Permission required — Access external directory` 프롬프트에서 멈추고, 그
    상태로 무한 대기한다. 기본값 `$REPO_ROOT/LLM-Wiki`가 이 문제를 피한다.
    사용자가 worktree 밖 vault를 지정하면, 로컬 worker 배정 전에 그 경로에 대한
@@ -80,6 +106,7 @@ deterministic 도구로 수행하고 그 사실을 `00-run.md`에 기록한다. 
 
 산출물: `10-context-pack.md` (200줄/12KB 상한), 그리고 선별한 각 파일을
 `scripts/build-context-manifest.py <run_dir> add ...`로 manifest에 등록.
+로컬 모델이면 마지막에 `artifacts/done/scout.done`도 쓴다 (`orca-runtime.md` §7).
 
 출력 형식:
 
@@ -168,6 +195,9 @@ findings:
 - path:line — severity — problem
 core_issue: none|escalate-to-coder
 ```
+
+로컬 모델이면 보고서를 쓴 다음 `artifacts/done/verify.done`을 쓴다
+(`orca-runtime.md` §7). Coordinator는 sentinel이 아니라 위 형식으로 성공을 판정한다.
 
 ## 5. Reviewer (claude, Coordinator 본인)
 

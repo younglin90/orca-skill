@@ -76,6 +76,8 @@ correction 이력, acceptance criteria 검토, 남은 위험, token 표
 - acceptance criteria가 충족됐다
 - unresolved escalation이 없다
 - 필요한 Wiki 보고서가 모두 작성됐다
+- worker terminal이 모두 release됐다 (`worker-list --terminal-state reclaimable`이
+  비어 있음). `retained`가 있으면 이유가 `90-final-review.md`에 적혀 있다
 - `99-state.md`가 completed로 갱신됐다
 
 실행하지 않은 테스트를 성공했다고 보고하지 않는다. 빌드·테스트 결과는
