@@ -50,9 +50,19 @@ orca-ide orchestration worker-release --dispatch <dispatch_id> --json
 - heartbeat나 terminal 활동만 보고 worker를 중단하지 않는다.
 - Delivery의 모든 메시지를 처리한 뒤에만 ack 한다.
 - `question`은 `orca-ide orchestration reply --id <msg_id> --body <answer> --json`.
-- 수락된 `worker_done` 처리 후 즉시 다음 소유자를 정한다. 같은 agent의 즉시 후속
-  Task가 있으면 terminal 재사용, 없으면 `worker-release`. **Codex는 Task 완료 후
-  항상 release**해 후속 무관 작업이 같은 context에 누적되지 않게 한다.
+- **기본은 즉시 종료다.** 수락된 `worker_done` (또는 `--outcome failed` 확정)
+  직후 그 dispatch를 `worker-release` 한다. 다음 단계 계획을 세우기 전에 release가
+  먼저다. Coordinator terminal은 절대 release 대상이 아니다.
+- 유일한 예외: **이미 확정된** 즉시 후속 Task가 같은 agent 소유이고 같은 context를
+  이어써야 이득일 때만 재사용 (§5). "나중에 또 쓸지도 모른다"는 재사용 근거가
+  아니다. 불확실하면 release 한다.
+- Codex는 예외 없이 항상 release 한다. 후속 무관 작업이 같은 context에 누적되지
+  않게 한다.
+- release는 산출물을 지우지 않는다. terminal이 닫힌 뒤에도 `worker-read`는 보존된
+  output archive를 반환한다. 로그를 보려고 terminal을 살려둘 이유는 없다.
+- 디버깅을 위해 사용자가 명시적으로 살려두라고 한 worker만
+  `worker-retain --dispatch <id>`로 예외 기록한다. 나중의 명시적 `worker-release`가
+  이 예외를 해제하고 종료시킨다.
 
 ### 모델과 생각 깊이 적용
 
@@ -100,12 +110,41 @@ question만 넣는다. 상세 보고서·계획·로그를 본문에 중복하�
 Orca messaging 대상: question, answer, escalation, `worker_done`, status,
 lifecycle control. 그 외 상세 내용은 전부 Wiki (`wiki-contract.md`).
 
-## 5. Terminal 재사용
+## 5. Terminal 재사용 (예외 경로)
 
-연속 역할에 같은 agent가 지정된 경우 (`coder=opencode worker=opencode` 등),
-이전 Dispatch가 정상 종료된 뒤에만 재사용을 고려한다. 재사용 문법과 조건은 live
-guide를 따른다. 활성 Dispatch가 종료되기 전에는 재사용하지 않는다. 상태가
-불명확하면 새 terminal을 만든다.
+재사용은 기본이 아니다. §3의 즉시 종료 규칙이 기본이고, 재사용은 두 조건이 **모두**
+성립할 때만 쓴다.
+
+1. 다음 Task가 이미 확정됐고 소유 agent가 직전 worker와 같다
+   (`coder=opencode worker=opencode` 등).
+2. 이전 Dispatch가 정상 종료됐다.
+
+재사용 문법과 조건은 live guide를 따른다. 활성 Dispatch가 종료되기 전에는 재사용하지
+않는다. 상태가 불명확하면 재사용하지 않고 release 후 새 terminal을 만든다.
+
+## 5.1 Run 종료 sweep
+
+Run을 `completed`/`failed`로 닫기 전에, 남은 worker terminal이 없는지 확인한다.
+Task status와 terminal 회수 상태는 별개다 — 완료된 Task가 살아있는 terminal을
+그대로 들고 있을 수 있다.
+
+```bash
+orca-ide orchestration worker-list --run <run_id> --terminal-state reclaimable --json
+```
+
+반환된 각 dispatch를 `worker-release --dispatch <dispatch_id> --json` 한다.
+`retained`로 나온 것은 사용자가 명시적으로 살려둔 것이므로 건드리지 않고 그
+사실만 `00-run.md`에 남긴다.
+
+- `already_released`와 `release_pending`은 성공이다 (exit 0). 재호출해도 안전하다.
+- `release_unknown`만 실패다 (exit 1). 이때는 `worker-show`로 상태를 확인하고,
+  coordinator가 만든 terminal임이 확실하면 `terminal close --terminal <handle>`로
+  닫는다. 확실하지 않으면 닫지 않고 사용자에게 보고한다.
+- `terminal stop --worktree`는 쓰지 않는다. 해당 worktree의 terminal을 무차별
+  종료하므로 Coordinator 자신이나 사용자 terminal까지 죽인다.
+
+`99-state.md`의 `overall_status`를 terminal 종료보다 먼저 쓰지 않는다. sweep 결과를
+확인한 뒤 최종 상태를 기록한다.
 
 ## 6. 실패 처리
 
@@ -130,3 +169,9 @@ guide를 따른다. 활성 Dispatch가 종료되기 전에는 재사용하지 �
   Coordinator가 산출물 파일을 직접 확인한 뒤
   `task-update --id <task_id> --status completed --result '<json>'`로 닫는다.
   worker의 보고 없이 성공으로 간주하지 않는다. 확인한 산출물 경로를 result에 남긴다.
+- 같은 이유로 **custom argv worker는 `worker-release`로 종료되지 않을 수 있다.**
+  `worker-release`는 proven identity의 coordinator-owned terminal만 닫고, 그 외에는
+  `release_unknown`을 반환한다. 이때는 `terminal create`가 반환한 handle을 그대로
+  써서 `terminal close --terminal <handle> --json`으로 닫는다. handle을 잃어버렸으면
+  `terminal list`로 title(생성 시 지정한 stage 이름)을 맞춰 찾는다. 그래서 custom
+  argv 경로에서는 `terminal create`의 handle을 반드시 `00-run.md`에 기록한다.

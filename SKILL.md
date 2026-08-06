@@ -87,7 +87,7 @@ codex=<model>/<effort> wiki=<abs> goal=<text>`
 
 ```text
 S0 부트스트랩 → S1 deterministic context → S2 local scout → S3 plan
-→ S4 implement gate → S5 verify → S6 risk-based final review
+→ S4 implement gate → S5 verify → S6 risk-based final review → S7 종료 sweep
 ```
 
 **S0 부트스트랩** — `orca-runtime.md` §2로 runtime 상태 확인, live orchestration
@@ -126,9 +126,15 @@ Task. 빌드·테스트·lint는 `scripts/run-captured.sh`로 실행해 로그�
 직접 실행하고 결과만 `90-final-review.md`에 기록한다.
 
 **S6 final review** — `review-policy.md`. 고위험 변경만 정확한 diff 범위를 읽는다.
-`90-final-review.md` 작성, `99-state.md`를 completed/failed로 갱신.
+`90-final-review.md` 작성.
 
-각 단계 종료 시 `99-state.md`와 `00-run.md` 진행표를 갱신한다.
+**S7 종료 sweep** — `orca-runtime.md` §5.1. 남은 worker terminal을 회수한 뒤에만
+`99-state.md`를 completed/failed로 갱신한다. 사용자에게 보고하는 시점에 Coordinator
+외의 agent terminal은 남아 있지 않아야 한다.
+
+각 단계 종료 시 `99-state.md`와 `00-run.md` 진행표를 갱신한다. 단계별 worker는 그
+단계가 끝나는 즉시 release 한다 (`orca-runtime.md` §3). 다음 단계 계획보다 release가
+먼저다.
 
 ## 4. 명령 실행 규칙
 
@@ -150,7 +156,8 @@ scripts/run-captured.sh --log <run_dir>/artifacts/build.log --label build -- <ar
 
 - worker `--outcome failed` 또는 `escalation`: correction budget 안에서 재배정.
   Planner 1회, Codex 1회, OpenCode 1회 (`review-policy.md` §3).
-- 같은 실패 반복 시 추가 호출하지 않고 실패 정보를 기록하고 종료한다.
+- 같은 실패 반복 시 추가 호출하지 않고 실패 정보를 기록하고 종료한다. 실패로 끝나는
+  경우에도 S7 sweep은 건너뛰지 않는다. 실패한 worker terminal도 회수 대상이다.
 - 한도 초과나 미충족 acceptance criteria는 성공으로 처리하지 않는다.
 - worker timeout은 실패가 아니다. rolling wait를 계속한다.
 - Orca runtime 상태 확인 실패는 즉시 중단 사유다 (`orca-runtime.md` §2).
