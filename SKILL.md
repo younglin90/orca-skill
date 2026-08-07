@@ -101,10 +101,12 @@ guide 로드, Run 생성. `wiki-contract.md` §1–3으로 Wiki 경로·역할
 **S1 deterministic context** — LLM 없이 Coordinator가 직접:
 
 ```bash
-scripts/collect-context.sh <run_dir>
+cd <worktree_root> && scripts/collect-context.sh <run_dir>
 ```
 
 `artifacts/`에 repo-tree, symbols, git-status, diff-stat 생성. 출력은 요약뿐이다.
+스크립트는 **cwd의 repo root**를 쓴다. worktree 기반 Run에서 cd를 빼면 메인 트리를
+스캔하고 그 사실이 출력의 `repo_root=` 한 줄에만 나타난다. 그 줄을 확인한다.
 
 **S2 local scout** — `worker` agent (기본 opencode)에게 Task 배정.
 산출물 `10-context-pack.md` + `artifacts/context-manifest.json`.

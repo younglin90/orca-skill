@@ -313,6 +313,22 @@ def main() -> int:
         "both observed path corruptions recorded",
     )
     check(
+        "긴 경로를 명령의 인자로 넘기지 않는다" in contracts,
+        "long paths are never passed as worker command arguments",
+    )
+    check(
+        "인자 없는 러너 스크립트" in contracts,
+        "argument-free runner script prescribed",
+    )
+    check(
+        '[ "$ok" -gt 0 ]' in contracts,
+        "report verdict requires a non-zero passed-check count",
+    )
+    check(
+        "cd <worktree_root> && scripts/collect-context.sh" in text,
+        "S1 pins the working directory before collecting context",
+    )
+    check(
         "finish_reason: length" in runtime and "limit.output" in runtime,
         "thinking-model output budget precondition recorded",
     )
