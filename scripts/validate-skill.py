@@ -344,6 +344,18 @@ def main() -> int:
         "온도가 통제되지 않은 비교로 모델을" in runtime,
         "model swaps require a controlled comparison",
     )
+    check(
+        "긴 문자열 재현 정확도를 측정한다" in runtime,
+        "string-reproduction fidelity is a model precondition",
+    )
+    check(
+        "두 경로, 접두사 겹침" in runtime,
+        "prefix-overlap failure structure recorded with per-model numbers",
+    )
+    check(
+        "OpenCode의 매처는 무죄다" in runtime,
+        "edit failure attributed to reproduction, not the matcher",
+    )
 
     # 13.4 the cost model that justifies one-call stages
     check(
