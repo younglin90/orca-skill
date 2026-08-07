@@ -190,6 +190,50 @@ dispatch에 `worker-release`를 걸면 `dispatch_inactive`로 거부되고 상�
   `worker-read`에 TASK 블록이 보이지 않는 것이다. 이때는 `worker-stop` →
   `task-update --status ready` → `worker-start`로 재시작한다. spec을 고치거나 모델을
   탓하기 전에 **TASK 블록이 실제로 주입됐는지부터 확인한다.**
+- **agent가 TASK를 받고도 스킬 라우팅으로 새어 나갈 수 있다. 주입 실패와 증상이
+  다르다.** 실측 2026-08-07: codex worker가 2400초 timeout, 산출물 0, 저장소 변경
+  0바이트로 끝났다. `worker-tail` 판정은 `preamble-missing`이 아니라 **`task-visible`**
+  이었고 TASK 블록이 화면에 그대로 있었다. 실제로 한 일은:
+
+  ```text
+  Ran sed -n '1,260p' /home/younglin90/.agents/skills/orca-cli/SKILL.md
+  Ran orca-ide skills get orca-cli && orca-ide status --json     (+389 lines)
+  ```
+
+  인과: Orca 주입 preamble의 어휘(worktree, terminal send, dispatch, handover)가 agent
+  CLI에 설치된 `orca-cli` 스킬의 트리거 문구와 겹친다. 여기에 codex 전역
+  `developer_instructions`의 `Follow AGENTS.md for skill/keyword routing`이 더해지면
+  agent는 착수 전에 그 스킬을 로드하고 `skills get`으로 전체 레퍼런스까지 끌어와 예산을
+  태운다. **모델 능력 문제도 spec 품질 문제도 아니다. 어휘 충돌이다.**
+
+  대응 순서:
+
+  1. spec 맨 앞에 instruction-source 가드를 넣는다 (`agent-contracts.md` §3).
+     `run-stage.sh`가 자동으로 붙인다.
+  2. 재시도 전에 `worker-tail`이 `skill-detour`를 냈는지 본다. 그렇다면 spec을 고치거나
+     모델을 탓하기 전에 가드부터 확인한다.
+  3. 가드가 있는데도 반복되면 그 agent를 그 단계에서 제외하고 Coordinator가 흡수한다.
+     40분짜리 실패를 한 번 더 감수할 근거는 없다.
+
+- **worker terminal이 과제 도중 죽어도 dispatch는 살아 있는 것처럼 보인다.** 실측
+  2026-08-07: codex 터미널이 착수 49초 만에 사라졌는데(`dispatched 10:06:34 ->
+  10:07:23`, heartbeat 없음, 메일 0건) `dispatch-show`의 status는 `failed`가 아니었고,
+  단계는 420초를 끝까지 기다렸다. 더 빠르고 확실한 신호는 터미널 쪽이다:
+
+  ```bash
+  orca-ide orchestration worker-read --dispatch <id> --limit 1 --json
+  # result.status.terminal == exited  -> 이 단계는 영원히 보고할 수 없다
+  ```
+
+  `run-stage.sh`가 폴링마다 이 둘을 함께 본다. 손으로 감독할 때도 timeout을 끝까지
+  기다리기 전에 터미널 생존을 먼저 확인한다.
+
+- **agent CLI가 Orca TUI 경로에서만 죽는 경우가 있다. CLI 자체 탓으로 단정하지 않는다.**
+  위 사례에서 같은 codex를 비대화형으로 직접 실행하면 정상 동작했다
+  (`codex exec ...` → 정답 출력, hook 정상, exit 0). 즉 CLI는 건강하고 Orca 터미널
+  경로에서만 재현된다. 원인 미확정. 진단 순서는 **CLI 단독 실행 → Orca 경로** 이며,
+  이 구분 없이 모델이나 spec을 바꾸면 엉뚱한 곳을 고치게 된다.
+
 - **custom argv 경로에서는 `worker_done`이 거부될 수 있다.** 실측: `terminal
   create` + `dispatch --inject`로 띄운 OpenCode worker가 보낸 `worker_done`이
   `The Dispatch capability is missing for the given dispatch ID`로 거부됐다.

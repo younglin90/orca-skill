@@ -237,6 +237,21 @@ Coder에게 **요청하지 않는다**:
 
 계획과 실제 코드가 충돌하면 구현을 강행하지 말고 Orca `ask` 또는 `escalation`.
 
+### instruction-source 가드 (필수)
+
+spec 맨 앞에 **지시 출처를 하나로 고정하는 문장**을 넣는다. `run-stage.sh`가 자동으로
+붙이므로 그 경로를 쓰면 손으로 적을 필요는 없다. 직접 `task-create`를 할 때는 반드시
+같은 내용을 넣는다.
+
+이유는 실측이다 (2026-08-07, `orca-runtime.md` §6 참조). Orca가 주입하는 preamble은
+worktree, terminal send, dispatch, handover 같은 단어를 쓰는데, 이는 agent CLI에 설치된
+`orca-cli`/`orchestration` 스킬의 트리거 문구와 **정확히 겹친다**. codex의 전역
+`developer_instructions`가 "AGENTS.md is the orchestration brain... Follow AGENTS.md for
+skill/keyword routing"라고 지시하고 있으면, codex는 과제를 시작하기 전에 그 스킬부터
+읽는다. 실측에서 codex는 2400초를 스킬 오리엔테이션에 쓰고 산출물을 0개 냈다.
+
+가드 문구는 큰따옴표를 포함하지 않는다 (§spec 인용 규칙).
+
 출력 형식 (`40-coder-report.md`):
 
 ```text
@@ -300,7 +315,9 @@ final: accepted|correction-required|failed
 
 ## 6. Coordinator
 
-Coordinator는 현재 Claude 세션이며 역할 인수로 바꿀 수 없다.
+Coordinator는 이 Skill을 실행 중인 세션이며 역할 인수로 바꿀 수 없다. Claude 세션일
+수도 Codex 세션일 수도 있고, 절차는 동일하다. Coordinator는 자기 자신을 worker로
+dispatch하지 않는다.
 
 책임: 인수 파싱·검증, Wiki 경로·역할 결정과 기억 갱신, Orca 부트스트랩, Run 생성,
 Run 디렉터리 생성, deterministic context 수집 실행, 단계별 Task 생성과 Dispatch,

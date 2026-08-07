@@ -10,6 +10,11 @@
 # Usage: worker-tail.sh --dispatch <dispatch_id> [--lines 10]
 #
 # First output line is a verdict token:
+#   skill-detour       the worker is reading SKILL.md or pulling a CLI skill
+#                      reference instead of working. The preamble vocabulary
+#                      matched its own installed skills. Do NOT restart blindly:
+#                      check that the spec carries the instruction-source guard
+#                      (agent-contracts.md section 3)
 #   task-visible       TASK block on screen; the worker received its instructions
 #   active-no-task     no TASK block, but the screen shows real activity. The
 #                      preamble has most likely scrolled off. Do NOT restart.
@@ -64,7 +69,20 @@ for raw in tail:
     keep.append(line)
 
 joined = " ".join(keep)
-if "=== TASK ===" in joined:
+# A worker that reads SKILL.md or pulls a CLI skill reference has matched the
+# preamble vocabulary against its own installed skills and is orienting itself
+# instead of working. It looks healthy -- the TASK block is right there on
+# screen -- which is exactly why it needs its own verdict.
+# Match what the worker DID, not what the task text says. The instruction-source
+# guard is echoed on screen as part of the TASK block, so a bare token match
+# flags every healthy run (measured: guard-test2, 2026-08-07).
+DETOUR = re.compile(
+    r"(Ran|Running|\$|>)\s[^\n]{0,80}"
+    r"(SKILL\.md|skills\s+get\b|/\.agents/skills/|/\.codex/skills/)"
+)
+if DETOUR.search(joined):
+    verdict = "skill-detour"
+elif "=== TASK ===" in joined:
     verdict = "task-visible"
 elif len(keep) >= 8:
     # Plenty on screen but the TASK block has scrolled out of the buffer.

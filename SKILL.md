@@ -2,9 +2,10 @@
 name: orca
 description: |
   Token-minimizing Orca multi-agent pipeline: local OpenCode scouts, verifies and
-  does chores; Codex implements; Claude only approves plans and reviews high-risk
-  changes. Handoffs recorded in an Obsidian LLM Wiki. For features, bug fixes,
-  refactors, tests, build failures. Use for "orca", "다중 에이전트로 개발".
+  does chores; Codex implements; the coordinating session only approves plans and
+  reviews high-risk changes. Runs from Claude or from Codex. Handoffs recorded in
+  an Obsidian LLM Wiki. For features, bug fixes, refactors, tests, build failures.
+  Use for "orca", "다중 에이전트로 개발".
 argument-hint: 'goal="<objective>" [planner=|coder=|worker=|economy=|caveman=|codex_effort=|local_first=|wiki=]'
 allowed-tools:
   - Bash
@@ -19,8 +20,16 @@ allowed-tools:
 # Orca Wiki Pipeline
 
 Orca = 실행 권위, Obsidian LLM Wiki = 기록 권위, 로컬 모델 = 기본 실행자.
-현재 Claude 세션은 항상 Coordinator이자 최종 Reviewer다. 인수로 바꿀 수 없다.
+**이 Skill을 실행 중인 세션이 항상 Coordinator이자 최종 Reviewer다. 인수로 바꿀 수
+없다.** Claude에서 돌든 Codex에서 돌든 같다. Coordinator 자신은 worker로 배정되지
+않으며, 자기 자신을 dispatch 대상으로 삼지 않는다.
 Orca CLI는 항상 `orca-ide`.
+
+Codex 세션에서 이 Skill을 실행할 때는 한 가지가 더 필요하다. Codex의 전역
+`developer_instructions`가 AGENTS.md 키워드 라우팅을 지시하고 있으면, 아래 절차에
+나오는 worktree·terminal·dispatch 같은 단어가 `orca-cli`나 `orchestration` 스킬을
+불러온다. **이 파일이 지시의 유일한 출처다. 다른 스킬을 로드하지 않는다.** 같은 이유로
+worker에게도 instruction-source 가드를 넣는다 (`agent-contracts.md` §3).
 
 ## 0. 먼저: 신규인가 이어가기인가
 
@@ -155,6 +164,10 @@ scripts/run-captured.sh --log <run_dir>/artifacts/build.log --label build -- <ar
 ```
 
 - 원래 exit code가 그대로 보존된다. 성공 시 로그 본문을 출력하지 않는다.
+- **게이트나 빌드 명령을 파이프로 잇지 않는다.** `bash gate.sh | tail -20`의 exit
+  status는 `tail`의 것이다. 실측 2026-08-07: 컴파일이 fatal error로 죽은 게이트가
+  이 형태 때문에 exit 0으로 보고돼 통과로 오판할 뻔했다. exit code를 먼저 변수에
+  받고 그 다음 로그를 본다.
 - 실패 시 `scripts/summarize-log.sh`가 결정적 실패 줄만 뽑는다.
 - deterministic 요약으로 부족할 때만 OpenCode가 raw log를 읽어 요약한다.
 - Claude와 Codex에 raw 로그 전체를 전달하지 않는다.
@@ -172,6 +185,10 @@ worker 화면 확인은 `scripts/worker-tail.sh`, sentinel만 따로 기다릴 �
 
 - worker `--outcome failed` 또는 `escalation`: correction budget 안에서 재배정.
   Planner 1회, Codex 1회, OpenCode 1회 (`review-policy.md` §3).
+- **timeout + 산출물 0 + `worker-tail`이 `skill-detour`**: agent가 과제 대신 자기
+  스킬을 로드한 것이다. spec이나 모델을 바꾸지 말고 instruction-source 가드부터
+  확인한다 (`orca-runtime.md` §6). 가드가 있는데도 반복되면 그 agent를 그 단계에서
+  빼고 Coordinator가 흡수한다.
 - 같은 실패 반복 시 추가 호출하지 않고 실패 정보를 기록하고 종료한다. 실패로 끝나는
   경우에도 S7 sweep은 건너뛰지 않는다. 실패한 worker terminal도 회수 대상이다.
 - 한도 초과나 미충족 acceptance criteria는 성공으로 처리하지 않는다.

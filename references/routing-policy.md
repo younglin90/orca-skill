@@ -31,9 +31,12 @@ LLM을 부르기 전에 셸·정적 도구로 처리한다. 이 목록의 작업
 - 문서와 주석, 테스트 fixture, acceptance matrix 초안
 - 저위험 단일 파일 수정, 기계적인 1~2개 파일 수정
 
-## 3. Claude only
+## 3. Coordinator only (frontier 판단)
 
-Claude는 다음에만 쓴다. 그 외 단계에서 Claude를 실행자로 배정하지 않는다.
+아래는 Coordinator가 직접 판단한다. 여기서 말하는 Coordinator는 이 Skill을 실행 중인
+세션이며 Claude일 수도 Codex일 수도 있다. 판단의 근거는 모델 이름이 아니라 **이 항목들이
+위임하면 안 되는 종류의 결정**이라는 점이다. 그 외 단계에는 Coordinator를 실행자로
+배정하지 않는다 — 배정하면 위임의 의미가 사라진다.
 
 - 목표와 요구사항 해석
 - 아키텍처 결정, 불명확한 설계 판정
