@@ -320,6 +320,14 @@ def main() -> int:
         "tool_call 대신 평문" in runtime,
         "non-tool-calling model precondition recorded",
     )
+    check(
+        "에러 회복률로 고른다" in runtime,
+        "worker model is selected on error recovery, not raw speed",
+    )
+    check(
+        "온도가 통제되지 않은 비교로 모델을" in runtime,
+        "model swaps require a controlled comparison",
+    )
 
     # 13.4 the cost model that justifies one-call stages
     check(
