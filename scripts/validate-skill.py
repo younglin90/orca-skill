@@ -31,6 +31,8 @@ SCRIPTS = [
     "summarize-log.sh",
     "build-context-manifest.py",
     "wait-for-report.sh",
+    "run-stage.sh",
+    "worker-tail.sh",
     "validate-skill.py",
 ]
 
@@ -273,10 +275,6 @@ def main() -> int:
         "worker_done payload treated as unverified claim",
     )
     check(
-        "최대 3개" in contracts,
-        "local spec step ceiling recorded",
-    )
-    check(
         "cd <절대경로> && <명령>" in contracts,
         "spec must pin the working directory",
     )
@@ -288,6 +286,78 @@ def main() -> int:
         "선택 추출을 시키지 않는다" in contracts,
         "local workers are never asked to select-and-extract",
     )
+
+    # 13.3 the failure model must match what was measured, not the old guess
+    check(
+        "단계 수는 상관없다" in contracts,
+        "step-count theory retracted in favour of the measured cause",
+    )
+    check(
+        "최대 3개" not in contracts,
+        "the retracted three-step ceiling is gone",
+    )
+    check(
+        "툴이 에러를 한 번 반환하면 회복하지 못한다" in contracts,
+        "error-in-loop recorded as the real local failure mode",
+    )
+    check(
+        "재시도시키지 않고 즉시 회수한다" in contracts,
+        "recall-on-first-error rule present",
+    )
+    check(
+        "finish_reason: length" in runtime and "limit.output" in runtime,
+        "thinking-model output budget precondition recorded",
+    )
+    check(
+        "tool_call 대신 평문" in runtime,
+        "non-tool-calling model precondition recorded",
+    )
+
+    # 13.4 the cost model that justifies one-call stages
+    check(
+        "횟수가 비용을 지배한다" in token,
+        "token policy states round-trips dominate cost",
+    )
+    check(
+        "run-stage.sh" in token and "run-stage.sh" in text,
+        "one-call stage driver referenced from token policy and SKILL.md",
+    )
+
+    # 13.5 stage driver and tail filter behaviour: run them
+    stage_sh = os.path.join(skill_dir, "scripts", "run-stage.sh")
+    if os.path.isfile(stage_sh):
+        proc = subprocess.run([stage_sh], capture_output=True, text=True)
+        check(proc.returncode == 2, "run-stage.sh rejects missing arguments",
+              f"got {proc.returncode}")
+        check("--run is required" in proc.stderr,
+              "run-stage.sh names the missing flag correctly", proc.stderr.strip()[:80])
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = os.path.join(tmp, "spec.txt")
+            open(empty, "w", encoding="utf-8").close()
+            proc_spec = subprocess.run(
+                [stage_sh, "--run", "run_x", "--spec-file", empty,
+                 "--done", os.path.join(tmp, "s.done")],
+                capture_output=True, text=True,
+            )
+            check(proc_spec.returncode == 2,
+                  "run-stage.sh rejects an empty spec file",
+                  f"got {proc_spec.returncode}")
+    tail_sh = os.path.join(skill_dir, "scripts", "worker-tail.sh")
+    if os.path.isfile(tail_sh):
+        proc_tail = subprocess.run([tail_sh], capture_output=True, text=True)
+        check(proc_tail.returncode == 2, "worker-tail.sh rejects missing arguments",
+              f"got {proc_tail.returncode}")
+        # No runtime needed: an unreadable stream must classify, not crash.
+        proc_cls = subprocess.run(
+            [tail_sh, "--dispatch", "ctx_definitely_not_a_real_dispatch"],
+            capture_output=True, text=True,
+        )
+        check(proc_cls.returncode == 0 and proc_cls.stdout.strip().splitlines()[0]
+              in {"unreadable", "preamble-missing", "active-no-task", "task-visible"},
+              "worker-tail.sh always emits a verdict token",
+              proc_cls.stdout.strip()[:60])
     check(
         "scripts/wait-for-report.sh" in text,
         "SKILL.md points to scripts/wait-for-report.sh",

@@ -160,8 +160,11 @@ scripts/run-captured.sh --log <run_dir>/artifacts/build.log --label build -- <ar
 파일을 읽기 전에는 `scripts/build-context-manifest.py <run_dir> check --path P`로
 중복 읽기를 확인한다 (`token-policy.md` §1).
 
-로컬 worker 완료를 기다릴 때는 `scripts/wait-for-report.sh`로 sentinel을 폴링한다.
-sleep/poll 루프를 직접 짜지 않는다.
+worker 단계 하나는 `scripts/run-stage.sh`로 **호출 1회**에 끝낸다. task 생성부터
+teardown까지 그 안에서 일어나고 짧은 영수증만 돌아온다. 단계를 손으로 쪼개 여러 번
+호출하면 그 왕복이 전부 Coordinator 컨텍스트에 영구히 쌓인다 (`token-policy.md` §0).
+worker 화면 확인은 `scripts/worker-tail.sh`, sentinel만 따로 기다릴 때는
+`scripts/wait-for-report.sh`. sleep/poll 루프를 직접 짜지 않는다.
 
 ## 5. 실패 처리
 

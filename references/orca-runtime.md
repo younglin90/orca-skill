@@ -305,3 +305,24 @@ Codex·Claude worker는 §3의 `worker_done` 경로를 그대로 쓴다. 두 경
    그 방법을 제안할 수 있다. Skill이 Ollama나 OpenCode 설정을 임의로 바꾸지 않는다.
 3. OpenCode의 subagent 툴이 꺼져 있어야 한다 (`tools.task=false`). 실측:
    `qwen3:8b`가 subagent를 무한 스폰하며 같은 작업을 반복했다.
+4. **thinking 모델은 출력 예산이 넉넉해야 한다.** `limit.output`을 8192 이상으로
+   둔다. 측정: `qwen3-32k:8b`에 같은 요청을 주고 `max_tokens`만 바꾼 결과.
+
+   ```text
+   max_tokens=  256  finish=length      tool_calls=0  reasoning=925자
+   max_tokens= 1500  finish=tool_calls  tool_calls=2  reasoning=3164자
+   max_tokens= 6000  finish=tool_calls  tool_calls=2  reasoning=2228자
+   ```
+
+   예산이 부족하면 reasoning이 전부 먹고 `finish_reason: length`로 끝나 툴 호출이
+   0이 된다. 화면에는 `+ Thought: 7.4s` 뒤 아무 일도 없는 것으로 보인다. 턴당
+   700~950 출력 토큰이 reasoning으로 나가므로 경계에 걸치면 산발적으로 실패한다.
+5. **툴 호출 형식이 실제로 나오는 모델이어야 한다.** 측정: `qwen2.5-coder:7b`는
+   프로브 7/7에서 tool_call 대신 평문을 냈다.
+
+   ```text
+   {"name": "bash", "arguments": {"command": "head -1 /etc/hostname"}}
+   ```
+
+   확률적 실수가 아니라 챗 템플릿이 OpenAI 형식 `tool_calls`를 만들지 않는 것이다.
+   worker 후보에서 제외한다. 새 모델을 쓰기 전에 1단계 프로브로 이것부터 확인한다.
