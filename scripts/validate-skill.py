@@ -305,6 +305,14 @@ def main() -> int:
         "recall-on-first-error rule present",
     )
     check(
+        "문자열을 옮겨 적게 하지 않는다" in contracts,
+        "local workers never retype fixed strings",
+    )
+    check(
+        "kem/Project" in contracts and "LLM_Wiki" in contracts,
+        "both observed path corruptions recorded",
+    )
+    check(
         "finish_reason: length" in runtime and "limit.output" in runtime,
         "thinking-model output budget precondition recorded",
     )

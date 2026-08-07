@@ -36,8 +36,32 @@ spec을 아무리 다듬어도 실패한다.
 
 1. 사용할 툴을 명시한다: `read`, `write`, `bash`, `grep`, `glob`만 쓴다.
    `explore`, `task`, subagent, 그 밖의 툴 이름을 만들어 부르지 않는다.
-2. 첫 동작을 지시한다: 먼저 산출물 파일을 만들고, 채워 넣은 뒤 완료한다.
-3. 자유 탐색 대신 **실행할 명령을 그대로 적어 준다**. 예:
+2. **로컬 worker에게 문자열을 옮겨 적게 하지 않는다.** 실측 3건에서 긴 경로가
+   조용히 훼손됐다.
+
+   ```text
+   LLM-Wiki          -> LLM_Wiki        (보고서와 sentinel을 엉뚱한 곳에 작성)
+   work/ProjectRoot -> kem/Project     (build/test 명령이 무효가 됨)
+   ```
+
+   sentinel도 `ok`, 형식 검사도 통과, 그런데 내용이 틀린다. 가장 잡기 어려운
+   실패다. 그러므로 `write` 툴로 고정 문자열을 재입력시키는 대신, Coordinator가 그
+   문자열을 파일로 미리 만들어 두고 worker는 셸로 옮기게만 한다.
+
+   ```text
+   STEP 1 run this exact command now:
+   sed -n '4,14p' <src> > <report>
+   STEP 2 run this exact command now:
+   cat <run_dir>/artifacts/trailer.txt >> <report>
+   STEP 3 run this exact command now:
+   echo ok > <run_dir>/artifacts/done/scout.done
+   ```
+
+   같은 단계를 `write` 툴 버전으로 돌렸을 때는 경로가 훼손됐고, 위 리다이렉션
+   버전은 원본과 바이트 단위로 일치했다. worker가 실제로 판단해야 하는 내용만
+   `write`로 쓰게 하고, 알려진 고정 텍스트는 전부 파일에서 온다.
+3. 첫 동작을 지시한다: 먼저 산출물 파일을 만들고, 채워 넣은 뒤 완료한다.
+4. 자유 탐색 대신 **실행할 명령을 그대로 적어 준다**. 예:
    `grep -n "add_test" CMakeLists.txt`, `head -100 <artifact>`.
    같은 이유로 **선택 추출을 시키지 않는다.** 실측: 120줄 문서를 보여 주고
    "이 7개 섹션만 골라 그대로 옮겨라"라고 한 로컬 worker는 파일을 읽은 뒤 정지했다.
@@ -53,19 +77,22 @@ spec을 아무리 다듬어도 실패한다.
 
    같은 worker가 선택 추출에서 멈춘 직후 이 range 명령을 받고는 즉시 성공했다.
    요약·재작성이 정말 필요하면 그 단계는 로컬에 배정하지 않는다.
-4. **완료를 명령 전송으로 요구하지 않는다.** 실측에서 완성된 리터럴 한 줄을
+5. **완료를 명령 전송으로 요구하지 않는다.** 실측에서 완성된 리터럴 한 줄을
    주입해도 로컬 모델이 실행하지 못했다. 대신 spec의 마지막 단계를 파일 작성으로
    고정한다: 보고서 파일을 쓴 뒤 sentinel 파일에 `ok` 한 줄을 쓴다. 경로와 판정
    절차는 `orca-runtime.md` §7. spec 문구 예:
 
    ```text
-   LAST STEP: use the write tool to create
-   /abs/run_dir/artifacts/done/scout.done containing exactly one line: ok
+   LAST STEP: run this exact command now:
+   echo ok > /abs/run_dir/artifacts/done/scout.done
    ```
-5. 단계 수를 제한한다: "탐색은 5개 명령 이내, 그 다음 바로 파일 작성."
-6. 로컬 모델의 context window는 작을 수 있다. artifact 전체를 읽으라고 하지 말고
+
+   2번에 따라 `write` 툴이 아니라 리다이렉션을 쓴다. sentinel 경로는 길고, 그것을
+   옮겨 적게 하면 훼손된다.
+6. 단계 수를 제한한다: "탐색은 5개 명령 이내, 그 다음 바로 파일 작성."
+7. 로컬 모델의 context window는 작을 수 있다. artifact 전체를 읽으라고 하지 말고
    `head`/`grep`로 필요한 부분만 보게 한다.
-7. **spec은 실패할 수 없어야 한다. 단계 수는 상관없다.**
+8. **spec은 실패할 수 없어야 한다. 단계 수는 상관없다.**
 
    초기 관찰은 "3단계 뒤에 멈춘다"였고 한때 이 문서도 그렇게 적었다. 통제 실험이
    그것을 반증했다. Ollama OpenAI-호환 엔드포인트에 툴 정의를 주고 에이전트 루프를
@@ -99,16 +126,16 @@ spec을 아무리 다듬어도 실패한다.
    순수 낭비이고, 그 사이 worker가 잘못된 경로에 파일을 쓸 수 있다 (실측: `LLM-Wiki`
    대신 `LLM_Wiki`에 보고서와 sentinel을 작성했다). 회수 후 그 단계는 Coordinator가
    deterministic 도구로 처리하거나 Coder에게 넘긴다.
-8. **spec 자체를 짧게 유지한다: 25줄 이내.** 실측에서 40줄짜리 spec을 준 로컬
+9. **spec 자체를 짧게 유지한다: 25줄 이내.** 실측에서 40줄짜리 spec을 준 로컬
    worker는 툴 호출 없이 생성만 하다 멈췄다. 실효 context 확인과 하한은
    `orca-runtime.md` §7 "환경 전제"에서 다룬다. 하한을 만족해도 spec 길이 규칙은
    유지한다. 짧은 spec은 compaction뿐 아니라 주의 분산도 줄인다.
-9. **모든 명령에 작업 디렉터리를 명시한다.** worker의 cwd는 worktree 루트다.
+10. **모든 명령에 작업 디렉터리를 명시한다.** worker의 cwd는 worktree 루트다.
    하위 패키지의 명령을 그냥 적으면 엉뚱한 곳에서 돌아 실패한다. 실측: `npm test`만
    적은 spec이 저장소 루트에서 실행돼
    `Could not read package.json: ENOENT ... /ProjectRoot/package.json`으로 죽었다.
    `cd <절대경로> && <명령>` 형태로 쓴다. 이건 모델의 실패가 아니라 spec의 결함이다.
-10. **Wiki는 반드시 worktree 안에 둔다.** OpenCode는 worktree 밖 경로에 쓰려 할 때
+11. **Wiki는 반드시 worktree 안에 둔다.** OpenCode는 worktree 밖 경로에 쓰려 할 때
    `Permission required — Access external directory` 프롬프트에서 멈추고, 그
    상태로 무한 대기한다. 기본값 `$REPO_ROOT/LLM-Wiki`가 이 문제를 피한다.
    사용자가 worktree 밖 vault를 지정하면, 로컬 worker 배정 전에 그 경로에 대한
