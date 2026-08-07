@@ -8,8 +8,9 @@
 # and worker teardown, then prints a fixed ~10-line receipt.
 #
 # Usage:
-#   run-stage.sh --run <run_id> --spec-file <path> --done <sentinel>
-#                [--agent opencode] [--report <path>] [--nudge-file <path>]
+#   run-stage.sh --run <run_id> --spec-file <path>
+#                [--done <sentinel>] [--agent opencode] [--report <path>]
+#                [--nudge-file <path>]
 #                [--timeout-sec 600] [--interval-sec 15] [--stage <label>]
 #
 # The spec is read from a file, never passed as an argument, so quotes and
@@ -54,7 +55,13 @@ check_required() {
 }
 check_required --run "$run_id"
 check_required --spec-file "$spec_file"
-check_required --done "$sentinel"
+
+# Completion signal. A local model cannot be relied on to send worker_done, so
+# those stages settle on a sentinel file. Codex and Claude do send it, and asking
+# them for a sentinel as well means polling for a file they were never told to
+# write - the poll then always times out and the stage is reported failed even
+# though its worker_done arrived. Omit --done for those agents.
+if [ -n "$sentinel" ]; then completion=sentinel; else completion=worker_done; fi
 [ -s "$spec_file" ] || { echo "run-stage: spec file is missing or empty: $spec_file" >&2; exit 2; }
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -69,8 +76,10 @@ for k in sys.argv[1].split("."):
     if cur is None: sys.exit(1)
 print(cur)' "$1" 2>/dev/null; }
 
-rm -f "$sentinel"
-mkdir -p "$(dirname "$sentinel")"
+if [ "$completion" = sentinel ]; then
+  rm -f "$sentinel"
+  mkdir -p "$(dirname "$sentinel")"
+fi
 [ -n "$report" ] && rm -f "$report"
 
 task_id=$("$CLI" orchestration task-create --run "$run_id" --spec "$(cat "$spec_file")" --json 2>/dev/null | jget result.task.id)
@@ -94,55 +103,10 @@ if [ -z "${dispatch_id:-}" ]; then
   exit 1
 fi
 
-wait_sentinel() {
-  local budget="$1" waited=0
-  while [ "$waited" -lt "$budget" ]; do
-    if [ -f "$sentinel" ]; then
-      if [ -n "$report" ] && [ ! -s "$report" ]; then return 2; fi
-      return 0
-    fi
-    sleep "$interval_sec"
-    waited=$((waited + interval_sec))
-  done
-  return 1
-}
-
-half=$((timeout_sec / 2)); [ "$half" -lt "$interval_sec" ] && half="$interval_sec"
-wait_sentinel "$half"; state=$?
-attempts=1
-diagnosis=""
-
-if [ "$state" -ne 0 ]; then
-  diagnosis=$("$here/worker-tail.sh" --dispatch "$dispatch_id" --lines 10 2>/dev/null)
-  if printf '%s' "$diagnosis" | grep -q 'preamble-missing'; then
-    # The task text never reached the agent: restart rather than nudge.
-    "$CLI" orchestration worker-stop --dispatch "$dispatch_id" --json >/dev/null 2>&1
-    "$CLI" orchestration task-update --id "$task_id" --status ready --json >/dev/null 2>&1
-    dispatch_id=$(start_worker)
-    attempts=2
-    wait_sentinel "$half"; state=$?
-  elif [ -n "$nudge_file" ] && [ -s "$nudge_file" ]; then
-    handle=$("$CLI" orchestration worker-show --dispatch "$dispatch_id" --json 2>/dev/null | jget result.terminal.handle)
-    if [ -n "${handle:-}" ]; then
-      "$CLI" terminal send --terminal "$handle" --text "$(cat "$nudge_file")" --enter --json >/dev/null 2>&1
-      attempts=2
-      wait_sentinel "$half"; state=$?
-    fi
-  else
-    wait_sentinel "$half"; state=$?
-  fi
-fi
-
-# A real worker_done can land just after the sentinel. Give it one short window
-# so the dispatch can be released instead of stopped. The Run mailbox holds
-# unread messages from earlier stages, so match on this dispatch id: a substring
-# match on the type alone reports another stage's completion as this one's and
-# leaves the task stuck in `dispatched`.
-done_seen=no
-if [ "$state" -eq 0 ]; then
-  if "$CLI" orchestration check --wait --types worker_done,escalation \
-        --timeout-ms 30000 --json 2>/dev/null \
-      | python3 -c '
+match_worker_done() {
+  "$CLI" orchestration check --wait --types worker_done,escalation \
+      --timeout-ms "$1" --json 2>/dev/null \
+    | python3 -c '
 import json, sys
 want = sys.argv[1]
 try:
@@ -158,9 +122,61 @@ for message in messages:
         continue
     if payload.get("dispatchId") == want:
         sys.exit(0)
-sys.exit(1)' "$dispatch_id"; then
-    done_seen=yes
+sys.exit(1)' "$dispatch_id"
+}
+
+wait_completion() {
+  local budget="$1" waited=0
+  while [ "$waited" -lt "$budget" ]; do
+    if [ "$completion" = sentinel ]; then
+      if [ -f "$sentinel" ]; then
+        if [ -n "$report" ] && [ ! -s "$report" ]; then return 2; fi
+        return 0
+      fi
+      sleep "$interval_sec"
+    else
+      if match_worker_done $((interval_sec * 1000)); then
+        done_seen=yes
+        if [ -n "$report" ] && [ ! -s "$report" ]; then return 2; fi
+        return 0
+      fi
+    fi
+    waited=$((waited + interval_sec))
+  done
+  return 1
+}
+
+half=$((timeout_sec / 2)); [ "$half" -lt "$interval_sec" ] && half="$interval_sec"
+done_seen=no
+wait_completion "$half"; state=$?
+attempts=1
+diagnosis=""
+
+if [ "$state" -ne 0 ]; then
+  diagnosis=$("$here/worker-tail.sh" --dispatch "$dispatch_id" --lines 10 2>/dev/null)
+  if printf '%s' "$diagnosis" | grep -q 'preamble-missing'; then
+    # The task text never reached the agent: restart rather than nudge.
+    "$CLI" orchestration worker-stop --dispatch "$dispatch_id" --json >/dev/null 2>&1
+    "$CLI" orchestration task-update --id "$task_id" --status ready --json >/dev/null 2>&1
+    dispatch_id=$(start_worker)
+    attempts=2
+    wait_completion "$half"; state=$?
+  elif [ -n "$nudge_file" ] && [ -s "$nudge_file" ]; then
+    handle=$("$CLI" orchestration worker-show --dispatch "$dispatch_id" --json 2>/dev/null | jget result.terminal.handle)
+    if [ -n "${handle:-}" ]; then
+      "$CLI" terminal send --terminal "$handle" --text "$(cat "$nudge_file")" --enter --json >/dev/null 2>&1
+      attempts=2
+      wait_completion "$half"; state=$?
+    fi
+  else
+    wait_completion "$half"; state=$?
   fi
+fi
+
+# In sentinel mode a real worker_done can still land just afterwards. Give it one
+# short window so the dispatch is released rather than stopped.
+if [ "$state" -eq 0 ] && [ "$done_seen" = no ]; then
+  if match_worker_done 30000; then done_seen=yes; fi
 fi
 
 if [ "$done_seen" = yes ]; then
@@ -191,13 +207,13 @@ echo "worker_done: $done_seen"
 echo "teardown: $teardown"
 echo "result: $outcome"
 if [ "$outcome" = ok ]; then
-  echo "sentinel: $(head -c 120 "$sentinel" | tr '\n' ' ')"
+  [ "$completion" = sentinel ] && echo "sentinel: $(head -c 120 "$sentinel" | tr '\n' ' ')"
   [ -n "$report" ] && echo "report: $report ($(wc -l < "$report" | tr -d ' ') lines)"
   exit 0
 fi
 case "$state" in
   2) echo "detail: sentinel written but report is empty" ;;
-  *) echo "detail: sentinel never appeared within ${timeout_sec}s" ;;
+  *) echo "detail: no ${completion} within ${timeout_sec}s" ;;
 esac
 [ -n "$diagnosis" ] && { echo "--- worker tail ---"; printf '%s\n' "$diagnosis"; }
 exit 1

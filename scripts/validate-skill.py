@@ -395,6 +395,19 @@ def main() -> int:
               "run-stage.sh does not match worker_done by type alone")
         check('payload.get("dispatchId") == want' in stage_src,
               "run-stage.sh scopes worker_done to its own dispatch")
+        # Codex and Claude report by worker_done and never write a sentinel.
+        # Demanding one made every such stage time out and report failed.
+        check("completion=worker_done" in stage_src,
+              "run-stage.sh supports a worker_done completion signal")
+        check("check_required --done" not in stage_src,
+              "--done is optional so worker_done agents are not forced to a sentinel")
+        proc_nodone = subprocess.run(
+            [stage_sh, "--run", "run_x", "--spec-file", "/etc/hostname"],
+            capture_output=True, text=True,
+        )
+        check(proc_nodone.returncode != 2,
+              "run-stage.sh accepts an invocation without --done",
+              f"got {proc_nodone.returncode}")
     tail_sh = os.path.join(skill_dir, "scripts", "worker-tail.sh")
     if os.path.isfile(tail_sh):
         proc_tail = subprocess.run([tail_sh], capture_output=True, text=True)
