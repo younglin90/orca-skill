@@ -15,6 +15,12 @@
 # The spec is read from a file, never passed as an argument, so quotes and
 # heredocs in the spec cannot reach the CLI argument parser.
 #
+# --timeout-sec must fit inside the caller's own command timeout. A coding
+# harness typically caps a foreground shell command at ten minutes, so keep
+# --timeout-sec under that or launch this script in the background. If the
+# script is killed mid-flight the worker keeps running and a worker_done still
+# completes the task; the receipt is what is lost, so re-check `task-list`.
+#
 # Exit 0  stage settled successfully (report present and non-empty when asked)
 # Exit 1  stage failed or timed out; the receipt says which
 # Exit 2  bad usage
@@ -128,11 +134,31 @@ if [ "$state" -ne 0 ]; then
 fi
 
 # A real worker_done can land just after the sentinel. Give it one short window
-# so the dispatch can be released instead of stopped.
+# so the dispatch can be released instead of stopped. The Run mailbox holds
+# unread messages from earlier stages, so match on this dispatch id: a substring
+# match on the type alone reports another stage's completion as this one's and
+# leaves the task stuck in `dispatched`.
 done_seen=no
 if [ "$state" -eq 0 ]; then
   if "$CLI" orchestration check --wait --types worker_done,escalation \
-        --timeout-ms 30000 --json 2>/dev/null | grep -q '"type": *"worker_done"'; then
+        --timeout-ms 30000 --json 2>/dev/null \
+      | python3 -c '
+import json, sys
+want = sys.argv[1]
+try:
+    messages = json.load(sys.stdin)["result"]["messages"]
+except Exception:
+    sys.exit(1)
+for message in messages:
+    if message.get("type") != "worker_done":
+        continue
+    try:
+        payload = json.loads(message.get("payload") or "{}")
+    except Exception:
+        continue
+    if payload.get("dispatchId") == want:
+        sys.exit(0)
+sys.exit(1)' "$dispatch_id"; then
     done_seen=yes
   fi
 fi

@@ -352,6 +352,13 @@ def main() -> int:
             check(proc_spec.returncode == 2,
                   "run-stage.sh rejects an empty spec file",
                   f"got {proc_spec.returncode}")
+        # The Run mailbox carries earlier stages' completions. Matching on the
+        # message type alone credits this stage with another stage's worker_done.
+        stage_src = read(stage_sh)
+        check('grep -q \'"type": *"worker_done"\'' not in stage_src,
+              "run-stage.sh does not match worker_done by type alone")
+        check('payload.get("dispatchId") == want' in stage_src,
+              "run-stage.sh scopes worker_done to its own dispatch")
     tail_sh = os.path.join(skill_dir, "scripts", "worker-tail.sh")
     if os.path.isfile(tail_sh):
         proc_tail = subprocess.run([tail_sh], capture_output=True, text=True)
