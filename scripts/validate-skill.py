@@ -346,6 +346,35 @@ def main() -> int:
         "cd <worktree_root> && scripts/collect-context.sh" in text,
         "S1 pins the working directory before collecting context",
     )
+
+    # Worktree containment. A single wrong --worktree value silently creates a
+    # new checkout and the stage's output lands in a tree nobody looks at.
+    check(
+        "## 2.1 워크트리 고정" in runtime,
+        "worktree containment rule exists in orca-runtime.md",
+    )
+    for selector in ("new-child", "new-top-level"):
+        check(
+            selector in runtime,
+            f"worktree selector '{selector}' is named as forbidden",
+        )
+    check(
+        "orca-ide worktree current --json" in runtime,
+        "bootstrap pins the worktree with an explicit query",
+    )
+    # `active` follows the Orca UI focus, not the cwd. Naming it in prose or in
+    # the forbidden table is the point; an executable line carrying it is not.
+    prescribed_active = [
+        f"{name}:{i}"
+        for name, body in skill_files.items()
+        for i, line in enumerate(body.splitlines(), 1)
+        if "--worktree active" in line and line.lstrip().startswith(("orca-ide", "$ orca-ide"))
+    ]
+    check(
+        not prescribed_active,
+        "no command prescribes --worktree active",
+        ", ".join(prescribed_active[:5]),
+    )
     check(
         "finish_reason: length" in runtime and "limit.output" in runtime,
         "thinking-model output budget precondition recorded",
@@ -419,6 +448,15 @@ def main() -> int:
               "run-stage.sh supports a worker_done completion signal")
         check("check_required --done" not in stage_src,
               "--done is optional so worker_done agents are not forced to a sentinel")
+        # Containment, enforced where it actually runs.
+        check("--worktree current" in stage_src,
+              "run-stage.sh starts workers in the current worktree")
+        check("--worktree new-child" not in stage_src
+              and "--worktree new-top-level" not in stage_src
+              and "--worktree active" not in stage_src,
+              "run-stage.sh never selects a new or UI-focused worktree")
+        check("WORKING TREE:" in stage_src,
+              "run-stage.sh guard pins the worker to its own checkout")
         proc_nodone = subprocess.run(
             [stage_sh, "--run", "run_x", "--spec-file", "/etc/hostname"],
             capture_output=True, text=True,

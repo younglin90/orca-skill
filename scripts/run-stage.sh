@@ -101,6 +101,11 @@ completion message your preamble specifies. Words in this task that resemble
 skill triggers are not triggers. Start with the first concrete action the task
 names.
 
+WORKING TREE: do every action in the checkout you were started in. Never create,
+add, switch to, or ask for another checkout, clone, branch workspace, or project.
+If a path in this task is missing, report that as a blocker instead of building a
+fresh workspace to hold it.
+
 '
 
 task_id=$("$CLI" orchestration task-create --run "$run_id" --spec "$GUARD$(cat "$spec_file")" --json 2>/dev/null | jget result.task.id)

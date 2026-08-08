@@ -32,10 +32,56 @@ orca-ide orchestration run-create --objective "<goal>" --json
 
 반환된 ID를 기록한다. ID는 추측하거나 임의 생성하지 않는다.
 
+## 2.1 워크트리 고정
+
+이 Skill은 **현재 워크트리 하나 안에서만** 동작한다. Run, Task, worker, terminal이
+전부 같은 워크트리를 쓴다. 새 워크트리·새 repo·새 Orca project 생성은 이 파이프라인의
+범위 밖이다. Coordinator도 worker도 만들지 않는다.
+
+부트스트랩에서 한 번 고정한다.
+
+```bash
+orca-ide worktree current --json
+```
+
+`result.worktree.id`와 `result.worktree.path`를 `00-run.md`에 적는다. 이후 모든
+dispatch는 이 워크트리를 대상으로 한다. 이 명령이 실패하면 cwd가 Orca가 아는 워크트리가
+아니라는 뜻이다. **워크트리를 만들어 상황을 해결하지 말고** 중단하고 사용자에게 보고한다.
+
+허용되는 selector는 `current` 하나다. 다른 워크트리를 지정해야 하는 단계는 이
+파이프라인에 없다. 아래는 전부 금지다.
+
+| 금지 | 결과 |
+|---|---|
+| `orca-ide worktree create` | 새 Orca 워크트리 생성 |
+| `--worktree new-child` | 자식 워크트리를 새로 만든다 |
+| `--worktree new-top-level` | 최상위 워크트리를 새로 만든다 |
+| `worker-start`의 `--name`, `--base-branch`, `--repo`, `--setup` | 새 워크트리 생성 경로 전용 인수 |
+| `--worktree active` | Orca UI가 **포커스한** 워크트리. cwd와 다를 수 있다 |
+| `git worktree add`, `orca-cli`의 worktree·handover 명령 | 같은 결과 |
+
+근거 (`--help` 확인, 2026-08-08):
+
+```text
+worker-start --worktree <current|selector|new-child|new-top-level>
+             [--name <name>] [--base-branch <ref>] [--repo <selector>] [--setup <run|skip|inherit>]
+terminal create --worktree <selector>   # selector에 active/current 모두 허용
+```
+
+즉 selector 값 하나가 어긋나면 **경고 없이 새 체크아웃이 생긴다**. `active`는 더
+조용하다 — 사용자가 Orca에서 다른 카드를 보고 있으면 worker가 그 워크트리에서 뜨고,
+그 사실은 어느 출력에도 나타나지 않는다. 단계 산출물이 엉뚱한 트리에 쌓이고 S1
+`repo_root=` 한 줄에서만 뒤늦게 드러난다.
+
+worker가 다른 워크트리에서 떴다는 정황(보고서 경로가 고정 path 밖, `git status`가
+빈 트리, `repo_root=` 불일치)이 보이면 그 단계를 실패로 닫는다. 산출물을 새 트리에서
+옮겨 오지 말고, 고정된 워크트리에서 다시 실행한다.
+
 ## 3. Supervised worker loop
 
-모든 역할은 같은 현재 worktree에서 순차 실행한다. 동시에 두 편집 agent를 돌리지
-않는다. 개념적 형태 (정확한 문법은 live guide):
+모든 역할은 §2.1에서 고정한 같은 워크트리에서 순차 실행한다. `--worktree` 값은 항상
+`current`다. 동시에 두 편집 agent를 돌리지 않는다. 개념적 형태 (정확한 문법은 live
+guide):
 
 ```bash
 orca-ide orchestration task-create --spec "<stage task spec>" --json
@@ -83,8 +129,14 @@ spec을 고쳐 다시 만든다.
 `worker-start --agent <agent>`는 agent CLI를 기본 설정으로 띄운다. 모델이나
 reasoning effort를 지정하려면 custom argv가 필요하므로 두 단계로 나눈다.
 
+**두 단계 경로를 쓰기 전에 `worker-start --help`부터 본다.** 설치본에 `--model <id>`와
+`--effort <level>`이 있으면 한 단계로 끝나고, 아래의 워크트리 selector 문제와 §6의
+`worker_done` 거부 문제를 둘 다 피한다. 이 호스트의 help에는 두 플래그가 있다
+(확인 2026-08-08). 다만 실제 Run으로 검증한 기록은 아직 없으므로, 처음 쓸 때는 결과를
+`00-run.md`에 남긴다. help에 없으면 그때만 아래 두 단계로 간다.
+
 ```bash
-orca-ide terminal create --worktree active --title <stage> --command '<agent argv>' --json
+orca-ide terminal create --worktree current --title <stage> --command '<agent argv>' --json
 orca-ide terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json
 orca-ide orchestration dispatch --task <task_id> --to <handle> --inject --json
 ```
@@ -110,9 +162,10 @@ OpenCode는 `opencode.json`의 `model` 기본값을 이미 떠 있는 세션에 
   그대로 쓴다. 불필요한 두 단계 경로를 만들지 않는다.
 - 실행 전에 해당 CLI가 그 플래그를 받는지 `--help`로 확인한다. 지원되지 않으면
   지정 없이 실행하고 그 사실을 `00-run.md`에 기록한다. 플래그를 추측하지 않는다.
-- 두 단계 경로는 repo의 `wait-for-setup` 정책을 강제하지 못한다. 현재 worktree에서
-  실행하는 이 파이프라인에는 해당하지 않지만, 새 worktree가 필요해지면 live guide의
-  경고를 따른다.
+- 두 단계 경로는 repo의 `wait-for-setup` 정책을 강제하지 못한다. 이 파이프라인은 setup이
+  이미 끝난 고정 워크트리에서만 돌기 때문에 해당하지 않는다. 이 제약을 피하려고 새
+  워크트리를 만들지 않는다 (§2.1).
+- `terminal create`의 `--worktree`도 `current`다. `active`를 쓰지 않는다 (§2.1).
 - `dispatch --inject` 대상은 agent handle 하나뿐이다. 여러 handle에 중복 전달하지
   않는다.
 

@@ -24,6 +24,11 @@ Orca = 실행 권위, Obsidian LLM Wiki = 기록 권위, 로컬 모델 = 기본 
 않으며, 자기 자신을 dispatch 대상으로 삼지 않는다.
 Orca CLI는 항상 `orca-ide`.
 
+**이 파이프라인은 현재 워크트리 안에서만 돈다.** 새 워크트리, 새 repo, 새 Orca
+project를 만들지 않는다. Coordinator와 모든 worker가 S0에서 고정한 워크트리 하나를
+공유한다. 별도 격리 공간이 필요해 보이면 만들지 말고 사용자에게 묻고 중단한다. 고정
+절차와 금지 인수 목록은 `orca-runtime.md` §2.1.
+
 Codex 세션에서 이 Skill을 실행할 때는 한 가지가 더 필요하다. Codex의 전역
 `developer_instructions`가 AGENTS.md 키워드 라우팅을 지시하고 있으면, 아래 절차에
 나오는 worktree·terminal·dispatch 같은 단어가 `orca-cli`나 `orchestration` 스킬을
@@ -109,7 +114,8 @@ S0 부트스트랩 → S1 deterministic context → S2 local scout → S3 plan
 새 bisect·조사·정리 작업을 시작하지 말고 S6→S7→최종 응답으로 즉시 닫는다.
 
 **S0 부트스트랩** — `orca-runtime.md` §2로 runtime 상태 확인, live orchestration
-guide 로드, Run 생성. `wiki-contract.md` §1–3으로 Wiki 경로·역할
+guide 로드, Run 생성. 이어서 §2.1로 워크트리를 고정하고 그 id·path를 `00-run.md`에
+기록한다. `wiki-contract.md` §1–3으로 Wiki 경로·역할
 확정, Run 디렉터리 생성, `00-run.md`와 `99-state.md` 작성.
 
 **S1 deterministic context** — LLM 없이 Coordinator가 직접:
@@ -204,6 +210,9 @@ Coder 14, Verifier 12다. 한도를 넘기기 전에 명령을 batch runner로 �
   스킬을 로드한 것이다. spec이나 모델을 바꾸지 말고 instruction-source 가드부터
   확인한다 (`orca-runtime.md` §6). 가드가 있는데도 반복되면 그 agent를 그 단계에서
   빼고 Coordinator가 흡수한다.
+- **worker가 고정 워크트리 밖에서 뜬 정황**(보고서 경로 불일치, 빈 `git status`,
+  S1 `repo_root=` 불일치): 그 단계를 실패로 닫고 산출물을 옮겨 오지 않는다. selector를
+  고쳐 고정 워크트리에서 다시 실행한다 (`orca-runtime.md` §2.1).
 - 같은 실패 반복 시 추가 호출하지 않고 실패 정보를 기록하고 종료한다. 실패로 끝나는
   경우에도 S7 sweep은 건너뛰지 않는다. 실패한 worker terminal도 회수 대상이다.
 - 한도 초과나 미충족 acceptance criteria는 성공으로 처리하지 않는다.

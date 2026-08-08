@@ -259,6 +259,14 @@ skill/keyword routing"라고 지시하고 있으면, codex는 과제를 시작�
 
 가드 문구는 큰따옴표를 포함하지 않는다 (§spec 인용 규칙).
 
+같은 어휘 충돌이 **작업 공간**에도 적용된다. preamble의 worktree·handover 어휘는
+`orca-cli`의 "child worktree", "spawn agent in a worktree" 트리거와 겹치고, 그 스킬을
+로드한 worker는 과제를 새 체크아웃에서 시작하려 든다. 그래서 가드에 작업 트리를
+고정하는 문단을 함께 넣는다 — 시작된 체크아웃에서만 작업하고, 다른 체크아웃·clone·
+project를 만들거나 요청하지 않으며, 경로가 없으면 새 공간을 만드는 대신 blocker로
+보고한다. `run-stage.sh`의 `GUARD`가 이 문단을 포함한다. 워크트리 규칙 전문은
+`orca-runtime.md` §2.1.
+
 출력 형식 (`40-coder-report.md`):
 
 ```text
