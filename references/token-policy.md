@@ -34,6 +34,29 @@ Coordinator 대화의 비용은 대략 Σ(각 API 호출 시점의 컨텍스트 
   것이다.
 - 폴링 간격을 좁혀도 정보는 늘지 않는다. `--interval-sec`은 15 이상으로 둔다.
 
+### 0.1 Model-turn circuit breaker
+
+2026-08-08 실측 Run은 5 worker에서 총 9,598,648 tokens를 기록했고 그중 94.6%가
+cached input이었다. Verifier 119 token events/80 tool calls, Scout 28 events가 전체의
+80.4%를 차지했다. 이를 기본 실패 모드로 취급한다.
+
+| role | model tool-call 상한 | 초과 전 조치 |
+|---|---:|---|
+| Scout | 10 | targeted `rg` 결과를 context pack으로 즉시 고정 |
+| Planner | 6 | 추가 탐색 중단, blocking assumption 기록 |
+| Coder | 14 | 검증 명령을 인자 없는 batch runner로 통합 |
+| Verifier | 12 | 완료된 receipt만 판정하거나 bounded blocker 기록 |
+
+- 장기 명령 실행을 LLM 감독 loop에 넣지 않는다. 반복 `ps`, `tail`, 로그 크기 확인,
+  같은 프로세스 상태 조회는 금지한다. deterministic runner가 종료 조건·timeout·로그
+  요약을 책임지고 model에는 최종 receipt 한 번만 돌려준다.
+- `repo-tree.txt`와 `symbols.txt`는 탐색 힌트다. 전문 읽기·prompt 첨부를 금지하고
+  goal 기반 targeted `rg`를 쓴다. 기본 수집기는 각각 line/byte cap을 적용한다.
+- Coder terminal은 즉시 S4 acceptance review가 끝날 때까지 유지한다. correction이
+  필요하면 같은 terminal에 한 번만 후속 Task를 보내고, 승인 즉시 release한다.
+- tool-call 상한 때문에 acceptance를 생략하지 않는다. 증명할 수 없으면 성공 대신
+  bounded blocker로 닫는다.
+
 세션을 새로 시작하는 것도 효과가 있지만 유일한 수단이 아니고, 진행 중인 작업에는
 쓸 수 없다. 위 규칙은 같은 세션 안에서 적용된다.
 
@@ -131,3 +154,6 @@ risk — evidence — required owner
 
 기록 위치와 항목은 `wiki-contract.md` §9. 측정할 수 없는 값을 추정해 실제 수치처럼
 기록하지 않는다.
+Codex task가 있으면 `scripts/report-token-usage.py`에 Task ID를 넘겨 worker session의
+마지막 token receipt를 수집한다. total, cached input, uncached input, output, model
+tool-call 수를 분리한다. cached token을 신규 token 또는 실제 비용으로 부르지 않는다.

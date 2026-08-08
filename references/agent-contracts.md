@@ -38,6 +38,11 @@ exit code만 보면 "아무것도 안 했다"가 통과한다. 통과한 검사 
 - 실패 결과 은폐 금지
 - 계획 문서(`20-plan.md`) 임의 변경 금지
 - 자기 역할 밖 파일 수정 금지
+- 장기 명령 진행을 확인하기 위한 반복 `ps`, `tail`, 로그 전체 읽기 금지
+
+Task spec은 역할별 tool-call 상한을 명시한다: Scout 10, Planner 6, Coder 14,
+Verifier 12. 상한은 성공 조건을 약화시키는 근거가 아니다. 초과가 필요하면 명령을
+인자 없는 batch runner로 합치고, 합칠 수 없으면 보고서에 bounded blocker를 남긴다.
 
 ### 로컬 모델(OpenCode) Task spec 강화
 
@@ -182,13 +187,14 @@ deterministic 도구로 수행하고 그 사실을 `00-run.md`에 기록한다. 
 
 ## 1. Local scout (opencode)
 
-입력: `99-state.md`, `artifacts/repo-tree.txt`, `artifacts/symbols.txt`,
-`artifacts/git-status.txt`, `artifacts/diff-stat.txt`, 사용자 goal.
+입력: `99-state.md`, 크기가 제한된 `artifacts/repo-tree.txt`·`symbols.txt` 탐색 힌트,
+`artifacts/git-status.txt`, `artifacts/diff-stat.txt`, 사용자 goal. 인덱스 전문을 읽지
+말고 goal의 고유 명사로 targeted `rg`를 시작한다.
 
 작업: goal과 관련된 파일·line range·symbol·호출 관계를 좁힌다. 빌드·테스트 명령을
 찾는다. 운영 코드를 수정하지 않는다.
 
-산출물: `10-context-pack.md` (200줄/12KB 상한), 그리고 선별한 각 파일을
+산출물: `10-context-pack.md` (80줄/8KB 상한), 그리고 선별한 각 파일을
 `scripts/build-context-manifest.py <run_dir> add ...`로 manifest에 등록.
 로컬 모델이면 마지막에 `artifacts/done/scout.done`도 쓴다 (`orca-runtime.md` §7).
 
@@ -209,7 +215,8 @@ question: <only if blocking>
 context pack이 불충분하거나 신뢰할 수 없을 때만 정확한 추가 line range를 읽고,
 그 사실과 이유를 `20-plan.md`의 Risks에 기록한다. 저장소 전체 재탐색 금지.
 
-산출물: `20-plan.md`. 이어서 `20-plan.brief.md`는 OpenCode가 생성한다.
+산출물: `20-plan.md` (60줄/6KB 상한). 이어서 `20-plan.brief.md`는 필요한 경우에만
+40줄/3KB 이내로 생성한다. plan이 이미 brief 상한 이하면 복제하지 않고 그대로 쓴다.
 
 `planner=claude`면 Coordinator가 직접 수행하고 별도 Claude worker를 만들지 않는다.
 `planner=codex|opencode`면 supervised worker를 만든다.
@@ -271,10 +278,13 @@ exit code와 artifact 경로만 적는다.
 
 ## 4. Local verifier / worker (opencode)
 
-입력: `99-state.md`, `50-worker-handoff.md`, `artifacts/full.diff`.
+입력: `99-state.md`, `50-worker-handoff.md`, deterministic build/test receipt와 요약,
+`artifacts/diff-stat.txt`, 고위험 변경의 정확한 diff range. `artifacts/full.diff`는
+targeted range로 부족할 때만 읽는다.
 
-작업: 전체 diff 검토, 빌드·테스트·lint 실행, 로그 분류, 포맷·import·주석·문서
-정리, 임시 파일 정리, 기계적 반복 수정.
+작업: 완료된 빌드·테스트·lint receipt 판정, targeted diff 검토, 로그 분류,
+포맷·import·주석·문서 정리, 임시 파일 정리, 기계적 반복 수정. 장시간 명령을 직접
+감독하거나 실행 중 상태를 polling하지 않는다.
 
 금지:
 

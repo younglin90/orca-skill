@@ -53,11 +53,9 @@ orca-ide orchestration worker-release --dispatch <dispatch_id> --json
 - **기본은 즉시 종료다.** 수락된 `worker_done` (또는 `--outcome failed` 확정)
   직후 그 dispatch를 `worker-release` 한다. 다음 단계 계획을 세우기 전에 release가
   먼저다. Coordinator terminal은 절대 release 대상이 아니다.
-- 유일한 예외: **이미 확정된** 즉시 후속 Task가 같은 agent 소유이고 같은 context를
-  이어써야 이득일 때만 재사용 (§5). "나중에 또 쓸지도 모른다"는 재사용 근거가
-  아니다. 불확실하면 release 한다.
-- Codex는 예외 없이 항상 release 한다. 후속 무관 작업이 같은 context에 누적되지
-  않게 한다.
+- 예외: Coder 구현 직후의 S4 acceptance review와 그 결과로 생기는 1회 correction은
+  같은 agent/context의 확정된 연속 작업이다. review가 끝날 때까지만 terminal을
+  유지하고, 승인 또는 correction 종료 즉시 release한다 (§5).
 - release는 산출물을 지우지 않는다. terminal이 닫힌 뒤에도 `worker-read`는 보존된
   output archive를 반환한다. 로그를 보려고 terminal을 살려둘 이유는 없다.
 - 디버깅을 위해 사용자가 명시적으로 살려두라고 한 worker만
@@ -131,8 +129,8 @@ lifecycle control. 그 외 상세 내용은 전부 Wiki (`wiki-contract.md`).
 재사용은 기본이 아니다. §3의 즉시 종료 규칙이 기본이고, 재사용은 두 조건이 **모두**
 성립할 때만 쓴다.
 
-1. 다음 Task가 이미 확정됐고 소유 agent가 직전 worker와 같다
-   (`coder=opencode worker=opencode` 등).
+1. 다음 Task가 이미 확정됐고 소유 agent가 직전 worker와 같다. 여기에는 S4 구현
+   직후 acceptance review에서 확정된 correction Task가 포함된다.
 2. 이전 Dispatch가 정상 종료됐다.
 
 재사용 문법과 조건은 live guide를 따른다. 활성 Dispatch가 종료되기 전에는 재사용하지

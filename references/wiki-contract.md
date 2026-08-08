@@ -87,14 +87,14 @@ Obsidian LLM Wiki는 **기록 권위자**다. 계획, 명세, 결과, correction
 
 ```text
 00-run.md            80줄
-10-context-pack.md   200줄 또는 12KB
-20-plan.md           150줄 또는 12KB
-20-plan.brief.md     80줄 또는 6KB
-30-coder-handoff.md  100줄 또는 8KB
-40-coder-report.md   100줄 또는 8KB
-50-worker-handoff.md 80줄 또는 6KB
-60-worker-report.md  100줄 또는 8KB
-90-final-review.md   120줄 또는 10KB
+10-context-pack.md   80줄 또는 8KB
+20-plan.md           60줄 또는 6KB
+20-plan.brief.md     40줄 또는 3KB
+30-coder-handoff.md  60줄 또는 5KB
+40-coder-report.md   60줄 또는 5KB
+50-worker-handoff.md 50줄 또는 4KB
+60-worker-report.md  60줄 또는 5KB
+90-final-review.md   100줄 또는 8KB
 99-state.md          40줄
 ```
 
@@ -188,6 +188,8 @@ Wiki 문서만 쓰고 Orca Task/Dispatch를 생략하면 안 된다. 반대로 O
 |---|---|
 | claude usage start/end | |
 | codex usage receipt | |
+| codex input/cached/output/total | |
+| model tool-call events by stage | |
 | opencode local | yes/no |
 | claude 호출 단계 수 | |
 | codex 호출 단계 수 | |
@@ -198,3 +200,5 @@ Wiki 문서만 쓰고 Orca Task/Dispatch를 생략하면 안 된다. 반대로 O
 ```
 
 측정할 수 없는 값은 `n/a`로 둔다. 추정치를 실측처럼 적지 않는다.
+Codex worker를 썼으면 `scripts/report-token-usage.py --task-id <id> ...`로 session
+receipt를 집계한다. cached input은 총 사용량과 분리해 기록하며 비용으로 환산하지 않는다.

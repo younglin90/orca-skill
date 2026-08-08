@@ -6,7 +6,6 @@ description: |
   reviews high-risk changes. Runs from Claude or from Codex. Handoffs recorded in
   an Obsidian LLM Wiki. For features, bug fixes, refactors, tests, build failures.
   Use for "orca", "다중 에이전트로 개발".
-argument-hint: 'goal="<objective>" [planner=|coder=|worker=|economy=|caveman=|codex_effort=|local_first=|wiki=]'
 allowed-tools:
   - Bash
   - Read
@@ -46,6 +45,8 @@ Wiki 경로를 정한 뒤 (§1) 가장 최근 Run 디렉터리의 `99-state.md`�
 ## 1. 인수
 
 `key=value`, 순서 고정 없음. 값의 바깥 따옴표는 제거한다.
+최소 호출은 `goal=<objective>`, 선택 인수는 `planner`, `coder`, `worker`, `economy`,
+`caveman`, `codex_effort`, `local_first`, `wiki`다.
 
 | 의미 | 허용 키 | 값 | 기본값 |
 |---|---|---|---|
@@ -117,13 +118,15 @@ guide 로드, Run 생성. `wiki-contract.md` §1–3으로 Wiki 경로·역할
 cd <worktree_root> && scripts/collect-context.sh <run_dir>
 ```
 
-`artifacts/`에 repo-tree, symbols, git-status, diff-stat 생성. 출력은 요약뿐이다.
+`artifacts/`에 크기가 제한된 repo-tree·symbols 탐색 힌트와 git-status·diff-stat을
+생성한다. 출력은 요약뿐이며 인덱스 전문을 model 입력으로 붙이지 않는다.
 스크립트는 **cwd의 repo root**를 쓴다. worktree 기반 Run에서 cd를 빼면 메인 트리를
 스캔하고 그 사실이 출력의 `repo_root=` 한 줄에만 나타난다. 그 줄을 확인한다.
 
 **S2 local scout** — `worker` agent (기본 opencode)에게 Task 배정.
 산출물 `10-context-pack.md` + `artifacts/context-manifest.json`.
 형식은 `agent-contracts.md` §1. Planner보다 **반드시 먼저** 실행한다.
+goal 기반 targeted `rg`만 허용하며 repo-tree·symbols 전문 읽기는 금지한다.
 로컬 모델 worker는 lifecycle 메시지를 보내지 못한다. 완료 판정은
 `orca-runtime.md` §7 (보고서 파일 + sentinel + Coordinator가 Task를 닫음).
 
@@ -140,13 +143,15 @@ Coordinator가 계획을 승인한다.
   Codex에는 brief·handoff·대상 line range·acceptance·금지 범위·테스트 명령·보고서
   경로만 전달한다 (`agent-contracts.md` §3).
 - 산출물 `40-coder-report.md`. Codex Task 종료 후 terminal release
-  (`orca-runtime.md` §3).
+  (`orca-runtime.md` §3). 단, 즉시 S4 acceptance review와 1회 correction 가능성이
+  있으면 같은 coder terminal을 그 review가 끝날 때까지만 유지한다.
 
 **S5 verify** — `worker`가 `none`이 아니면 `50-worker-handoff.md` 작성 후 Worker
-Task. 빌드·테스트·lint는 `scripts/run-captured.sh`로 실행해 로그를 `artifacts/`에
-남긴다. 산출물 `60-worker-report.md`. 로컬 모델 worker면 S2와 같은 §7 완료 판정을
-쓴다. `worker=none`이면 Coordinator가 같은 명령을 직접 실행하고 결과만
-`90-final-review.md`에 기록한다.
+Task. 장시간 빌드·테스트·lint 실행은 먼저 인자 없는 deterministic runner 하나로
+묶어 `scripts/run-captured.sh` 로그를 `artifacts/`에 남긴다. LLM worker는 실행 중
+`ps`·`tail` polling을 하지 않고 완료된 receipt·요약과 targeted diff만 판정한다.
+산출물 `60-worker-report.md`. 로컬 모델 worker면 S2와 같은 §7 완료 판정을 쓴다.
+`worker=none`이면 Coordinator가 같은 deterministic 결과를 직접 판정한다.
 
 **S6 final review** — `review-policy.md`. 고위험 변경만 정확한 diff 범위를 읽는다.
 `90-final-review.md` 작성.
@@ -185,6 +190,12 @@ teardown까지 그 안에서 일어나고 짧은 영수증만 돌아온다. 단�
 worker 화면 확인은 `scripts/worker-tail.sh`, sentinel만 따로 기다릴 때는
 `scripts/wait-for-report.sh`. sleep/poll 루프를 직접 짜지 않는다.
 
+**Token circuit breaker** — 역할별 model tool-call 상한은 Scout 10, Planner 6,
+Coder 14, Verifier 12다. 한도를 넘기기 전에 명령을 batch runner로 합치거나 현재
+증거로 bounded blocker를 기록한다. 장기 명령을 기다리기 위한 반복 `ps`, `tail`,
+상태 조회는 호출 예산에 관계없이 금지한다. 세부 규칙과 실측 집계는
+`references/token-policy.md` §0–§6.
+
 ## 5. 실패 처리
 
 - worker `--outcome failed` 또는 `escalation`: correction budget 안에서 재배정.
@@ -216,30 +227,6 @@ Wiki Run 디렉터리 경로
 
 문서 전문을 사용자 응답에 붙여넣지 않는다. 경로와 요약만 보고한다.
 
-## 7. 호출 예시
-
-```text
-/orca economy=max planner=claude coder=codex worker=opencode caveman=lite wiki="/home/user/Obsidian/LLM-Wiki" goal="경계 셀 gradient 정확도 문제를 수정하고 회귀 테스트를 추가한다"
-```
-
-```text
-/orca 계획자=claude 코더=opencode 잡일꾼=none 목적="C++ 솔버의 빌드 오류를 수정한다"
-```
-
-모델과 생각 깊이를 직접 지정. Claude worker에만 적용되며 Coordinator 세션은
-`/model`, `/effort`로 따로 정한다.
-
-```text
-/orca claude_model=opus claude_effort=xhigh codex_effort=high goal="수치 알고리즘의 경계조건 처리를 다시 구현한다"
-```
-
-역할·Wiki 생략 시 기억된 구성과 `$REPO_ROOT/LLM-Wiki`를 쓴다. 첫 실행이면 역할과
-모델·생각 깊이를 물어본다.
-
-```text
-/orca goal="사용자 인증 모듈의 세션 만료 처리를 구현하고 테스트를 추가한다"
-```
-
-## 8. 자체 검증
+## 7. 자체 검증
 
 Skill 자체를 수정한 뒤에는 `scripts/validate-skill.py`를 실행한다.

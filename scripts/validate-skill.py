@@ -33,6 +33,7 @@ SCRIPTS = [
     "wait-for-report.sh",
     "run-stage.sh",
     "worker-tail.sh",
+    "report-token-usage.py",
     "validate-skill.py",
 ]
 
@@ -101,7 +102,7 @@ def main() -> int:
     check(fm is not None, "frontmatter parses", note)
     if fm:
         check(fm.get("name") == "orca", "name is orca", str(fm.get("name")))
-        for key in ("description", "argument-hint", "allowed-tools"):
+        for key in ("description", "allowed-tools"):
             check(key in fm, f"frontmatter has {key}")
 
     # 2. size budget
@@ -244,6 +245,10 @@ def main() -> int:
     for marker in ("code block", "허용오차", "acceptance criteria", "부정어"):
         check(marker in token, f"token-policy protects '{marker}' from compression")
     check("`ultra` 수준은 사용하지 않는다" in token, "ultra compression level disabled")
+    for marker in ("Scout | 10", "Planner | 6", "Coder | 14", "Verifier | 12"):
+        check(marker in token, f"token-policy has tool-call budget '{marker}'")
+    check("반복 `ps`, `tail`" in token, "token-policy forbids LLM progress polling")
+    check("report-token-usage.py" in token, "token-policy records measured Codex usage")
 
     # 13. correction budget
     for marker in ("Planner correction", "Codex correction", "OpenCode mechanical correction"):
@@ -485,9 +490,9 @@ def main() -> int:
                   "wait-for-report.sh fails on sentinel without report",
                   f"got {proc_bad.returncode}")
 
-    # 14. invocation examples
-    check(text.count("/orca") >= 3, "SKILL.md shows >= 3 invocation examples")
-    check("economy=max" in text and "goal=" in text, "examples cover economy and goal args")
+    # 14. Keep invocation syntax discoverable without paying for repeated examples.
+    check("goal=<objective>" in text and "`economy`" in text,
+          "body exposes goal and economy without verbose examples")
 
     # 15. duplicate-rule detection
     for marker, owner in CANONICAL_OWNER.items():

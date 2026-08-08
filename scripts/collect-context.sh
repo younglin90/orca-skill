@@ -7,7 +7,9 @@
 #   repo_root defaults to `git rev-parse --show-toplevel` from the cwd.
 set -euo pipefail
 
-LINE_CAP=5000
+TREE_LINE_CAP=${ORCA_TREE_LINE_CAP:-800}
+SYMBOL_LINE_CAP=${ORCA_SYMBOL_LINE_CAP:-400}
+BYTE_CAP=${ORCA_CONTEXT_BYTE_CAP:-65536}
 
 die() {
   echo "collect-context.sh: $1" >&2
@@ -38,6 +40,18 @@ truncate_to_cap() {
   else
     cp "$src" "$dst"
   fi
+}
+
+# Keep navigation hints small enough that an agent cannot accidentally admit a
+# repository-wide index into every subsequent model turn.
+truncate_bytes() {
+  local path=$1 cap=$2 label=$3 size tmp
+  size=$(wc -c < "$path" | tr -d ' ')
+  [ "$size" -le "$cap" ] && return 0
+  tmp="$path.byte-cap"
+  head -c "$cap" "$path" > "$tmp"
+  printf '\n... [%s byte-capped: showing %s of %s bytes]\n' "$label" "$cap" "$size" >> "$tmp"
+  mv "$tmp" "$path"
 }
 
 count_lines() {
@@ -103,7 +117,8 @@ if [ ! -s "$tree_raw" ]; then
   fi
 fi
 tree_total_lines=$(count_lines "$tree_raw")
-truncate_to_cap "$tree_raw" "$repo_tree_file" "$LINE_CAP" "$tree_total_lines"
+truncate_to_cap "$tree_raw" "$repo_tree_file" "$TREE_LINE_CAP" "$tree_total_lines"
+truncate_bytes "$repo_tree_file" "$BYTE_CAP" repo-tree
 
 # --- symbols.txt --------------------------------------------------------------
 symbols_raw="$work_tmp/symbols-raw.txt"
@@ -126,7 +141,8 @@ if [ ! -s "$symbols_raw" ]; then
   fi
 fi
 symbols_total_lines=$(count_lines "$symbols_raw")
-truncate_to_cap "$symbols_raw" "$symbols_file" "$LINE_CAP" "$symbols_total_lines"
+truncate_to_cap "$symbols_raw" "$symbols_file" "$SYMBOL_LINE_CAP" "$symbols_total_lines"
+truncate_bytes "$symbols_file" "$BYTE_CAP" symbols
 
 # --- summary -------------------------------------------------------------------
 cat <<SUMMARY
@@ -134,6 +150,7 @@ collect-context: repo_root=$repo_root
 changed files (git status): $changed_files
 tracked+untracked files: $tree_total_lines
 symbol index lines: $symbols_total_lines
+navigation caps: tree=$TREE_LINE_CAP lines symbols=$SYMBOL_LINE_CAP lines bytes=$BYTE_CAP each
 artifacts:
   $git_status_file
   $diff_stat_file
