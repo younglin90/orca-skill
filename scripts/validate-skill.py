@@ -156,6 +156,11 @@ def main() -> int:
         "Planner보다 **반드시 먼저** 실행" in text,
         "SKILL.md states scout-before-planner explicitly",
     )
+    check("**Scope fence**" in text, "SKILL.md defines a scope fence")
+    check(
+        "active` 상태나 오래된 \"next\" 항목만으로 이어가지 않는다" in text,
+        "active historical state alone cannot resume a Run",
+    )
 
     # 7. low-risk local implementation gate
     routing = skill_files.get("references/routing-policy.md", "")
@@ -172,6 +177,14 @@ def main() -> int:
     check(
         "전체 저장소나 raw artifacts를 자동으로 읽지 않는다" in review,
         "final review forbids auto-reading whole repo/raw artifacts",
+    )
+    check(
+        "optional/deferred" in review and "out-of-scope historical follow-up" in review,
+        "review separates required work from optional and historical follow-up",
+    )
+    check(
+        "새 Task로 시작하지 않는다" in review,
+        "review forbids starting unrelated follow-up before closure",
     )
 
     # 9. Codex must not read the whole wiki or raw logs

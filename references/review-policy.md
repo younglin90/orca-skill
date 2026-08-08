@@ -63,7 +63,15 @@ Goal / planner / coder / worker / economy, Orca Run ID, Tasks와 Dispatches,
 correction 이력, acceptance criteria 검토, 남은 위험, token 표
 (`wiki-contract.md` §9), 그리고 결론부는 `agent-contracts.md` §5 형식.
 
-## 5. 완료 조건
+## 5. Scope closure gate
+
+최종 검토 시작 시 `90-final-review.md`에 현재 사용자 목표의 항목을 세 줄로 분류한다:
+`required`, `optional/deferred`, `out-of-scope historical follow-up`. required만 완료를
+막는다. `99-state.md`의 active/next, 오래된 roadmap, 이전 Run의 bisect가 있다는 이유만으로
+optional·historical 항목을 새 Task로 시작하지 않는다. required acceptance가 충족되면 먼저
+S7 sweep과 최종 응답을 끝내고, 후속은 명시적으로 별도 요청될 때만 새 Run으로 연다.
+
+## 6. 완료 조건
 
 모두 만족해야 완료다.
 

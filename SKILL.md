@@ -38,9 +38,9 @@ Wiki 경로를 정한 뒤 (§1) 가장 최근 Run 디렉터리의 `99-state.md`�
 
 - `overall_status`가 `completed`/`failed`이거나 Run이 없으면 **신규 실행**.
   §1부터 진행한다.
-- 그렇지 않고 사용자가 같은 목표를 이어가는 중이면 **이어가기**. 이때는
-  `99-state.md`와 `current_stage`에 해당하는 reference **하나만** 읽는다.
-  이미 읽은 문서를 다시 읽지 않고, 나머지 reference와 완료된 단계 문서는 건너뛴다.
+- 그렇지 않고 사용자가 같은 목표를 이어가는 중이며 남은 항목이 현재 목표에 속하면
+  **이어가기**. `active` 상태나 오래된 "next" 항목만으로 이어가지 않는다.
+  이때는 `99-state.md`와 `current_stage` reference **하나만** 읽고, 완료 단계는 건너뛴다.
 - 목표가 바뀌었으면 이어가기가 아니다. 새 Run을 만든다 (`token-policy.md` §5).
 
 ## 1. 인수
@@ -102,6 +102,10 @@ codex=<model>/<effort> wiki=<abs> goal=<text>`
 S0 부트스트랩 → S1 deterministic context → S2 local scout → S3 plan
 → S4 implement gate → S5 verify → S6 risk-based final review → S7 종료 sweep
 ```
+
+**Scope fence** — S0와 S5 직후 모든 후속 항목을 `required`, `optional/deferred`,
+`out-of-scope`로 분류한다. required만 dispatch한다. 현재 목표의 acceptance가 끝나면
+새 bisect·조사·정리 작업을 시작하지 말고 S6→S7→최종 응답으로 즉시 닫는다.
 
 **S0 부트스트랩** — `orca-runtime.md` §2로 runtime 상태 확인, live orchestration
 guide 로드, Run 생성. `wiki-contract.md` §1–3으로 Wiki 경로·역할
